@@ -98,4 +98,104 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
     msg['From'] = EMAIL_SENDER
     msg['To'] = recipient_email
     body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email).'
-    msg.attach(MIMEText
+    msg.attach(MIMEText(body_text, 'plain'))
+    if image_bytes_for_attachment:
+        try:
+            subtype = 'jpeg' if image_name_for_email.lower().endswith(('.jpg', '.jpeg')) else 'png'
+            img_mime = MIMEImage(image_bytes_for_attachment, subtype=subtype, name=os.path.basename(image_name_for_email))
+            img_mime.add_header('Content-Disposition', 'attachment', filename=os.path.basename(image_name_for_email))
+            msg.attach(img_mime)
+        except Exception as e:
+            log_message(f"  Erreur lors de l'attachement de l'image {image_name_for_email}: {e}")
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            smtp.send_message(msg)
+        log_message(f"  Email envoyé avec succès à {recipient_email} pour l'image {image_name_for_email}")
+    except Exception as e:
+        log_message(f"  Erreur lors de l'envoi de l'email : {e}")
+
+# === SURVEILLANCE DES EMAILS ===
+def process_emails():
+    log_message("Connexion à la boîte mail pour analyse...")
+    try:
+        mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
+        mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
+        mail.select("inbox")
+        # Recherche tous les e-mails, puis filtrer par corps
+        status, data = mail.search(None, "ALL")
+        email_ids = data[0].split()
+        if not email_ids:
+            log_message("  Aucun email trouvé dans la boîte.")
+        for email_id in email_ids:
+            status, msg_data = mail.fetch(email_id, "(RFC822)")
+            raw_email = msg_data[0][1]
+            msg = email.message_from_bytes(raw_email)
+            # Vérifier le corps du mail pour les mots-clés
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == 'text/plain':
+                        body = part.get_payload(decode=True).decode(part.get_content_charset('utf-8'))
+                        if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body:
+                            log_message(f"  📧 Email {email_id} contient un mot-clé dans le corps.")
+                            for attachment_part in msg.walk():
+                                if attachment_part.get_content_maintype() == 'multipart':
+                                    continue
+                                if attachment_part.get('Content-Disposition') and 'attachment' in attachment_part.get('Content-Disposition'):
+                                    filename = attachment_part.get_filename()
+                                    if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
+                                        log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id}...")
+                                        image_data = attachment_part.get_payload(decode=True)
+                                        img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
+                                        detection_result = detect_human(img_cv2)
+                                        if detection_result is True:
+                                            log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
+                                            send_email_alert(EMAIL_USER, image_data, filename)
+                                        elif detection_result is False:
+                                            log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
+                                            mail.store(email_id, '+FLAGS', '\\Deleted')
+                                        else:
+                                            log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
+        mail.expunge()
+        mail.logout()
+        log_message("Analyse des emails terminée.")
+    except Exception as e:
+        log_message(f"  Erreur lors de la connexion ou du traitement des emails : {e}")
+        import traceback
+        traceback.print_exc()
+
+# === SCRIPT PRINCIPAL (pour Cron Job) ===
+def main():
+    log_message("--- Démarrage du script de surveillance des emails ---")
+    required_vars = {
+        "SENDER_EMAIL": EMAIL_SENDER,
+        "APP_PASSWORD": EMAIL_PASSWORD,
+        "DEST_EMAIL": RECIPIENT_EMAIL,
+        "EMAIL_APP_PASSWORD": EMAIL_APP_PASSWORD
+    }
+    missing_vars = [name for name, value in required_vars.items() if not value]
+    if missing_vars:
+        log_message(f"ERREUR CRITIQUE: Variables d'environnement manquantes : {', '.join(missing_vars)}.")
+        log_message("Veuillez vérifier leur configuration sur Koyeb.")
+        return
+
+    if not load_yolo_model():
+        log_message("Échec du chargement du modèle YOLO. Arrêt.")
+        return
+
+    log_message(f"Emails analysés sur: {EMAIL_USER}")
+    log_message(f"Emails envoyés à: {RECIPIENT_EMAIL}")
+    log_message(f"Emails envoyés de: {EMAIL_SENDER}")
+    log_message("----------------------------------------------------")
+
+    try:
+        process_emails()
+    except Exception as e:
+        log_message(f"Une erreur majeure est survenue dans main() : {e}")
+        import traceback
+        traceback.print_exc()
+
+    log_message("--- Fin du script de surveillance des emails ---")
+
+if __name__ == "__main__":
+    main()

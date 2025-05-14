@@ -23,7 +23,7 @@ EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
 SMTP_PORT = 993
-IMAP_TIMEOUT = 60  # Augmenter le timeout à 60 secondes
+IMAP_TIMEOUT = 60  # Timeout de 60 secondes
 
 # Fichiers YOLO
 YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
@@ -107,13 +107,12 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
     if image_bytes_for_attachment:
         try:
             log_message(f"  Taille des données de l'image {image_name_for_email}: {len(image_bytes_for_attachment)} octets")
-            # Forcer le sous-type MIME en fonction de l'extension
             if image_name_for_email.lower().endswith(('.jpg', '.jpeg')):
                 subtype = 'jpeg'
             elif image_name_for_email.lower().endswith('.png'):
                 subtype = 'png'
             else:
-                subtype = 'jpeg'  # Par défaut, on suppose JPEG
+                subtype = 'jpeg'
             log_message(f"  Sous-type MIME déterminé pour {image_name_for_email}: {subtype}")
             img_mime = MIMEImage(image_bytes_for_attachment, _subtype=subtype)
             img_mime.add_header('Content-Disposition', 'attachment', filename=os.path.basename(image_name_for_email))
@@ -121,7 +120,6 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
             log_message(f"  Image {image_name_for_email} attachée avec succès à l'e-mail.")
         except Exception as e:
             log_message(f"  Erreur lors de l'attachement de l'image {image_name_for_email}: {e}")
-            # Envoyer l'e-mail sans l'image
             body_text += f"\n(Erreur lors de l'attachement de l'image : {str(e)})"
             msg.attach(MIMEText(body_text, 'plain'))
     try:
@@ -133,8 +131,7 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
         log_message(f"  Erreur lors de l'envoi de l'email : {e}")
 
 # === SURVEILLANCE DES EMAILS ===
-def process_emails():
-    log_message("Connexion à la boîte mail pour analyse...")
+def connect_to_imap():
     try:
         mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
         mail.socket().settimeout(IMAP_TIMEOUT)
@@ -142,8 +139,21 @@ def process_emails():
         mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
         log_message("Connexion IMAP réussie. Sélection de la boîte inbox...")
         mail.select("inbox")
-        # Limiter aux e-mails des dernières 12 heures
-        since_date = (datetime.datetime.now() - datetime.timedelta(hours=12)).strftime("%d-%b-%Y")
+        return mail
+    except Exception as e:
+        log_message(f"  Erreur lors de la connexion IMAP : {e}")
+        return None
+
+def process_emails():
+    log_message("Connexion à la boîte mail pour analyse...")
+    mail = connect_to_imap()
+    if not mail:
+        log_message("  Échec de la connexion IMAP. Abandon.")
+        return
+
+    try:
+        # Limiter aux e-mails des dernières 6 heures
+        since_date = (datetime.datetime.now() - datetime.timedelta(hours=6)).strftime("%d-%b-%Y")
         status, data = mail.search(None, f'SINCE "{since_date}"')
         email_ids = data[0].split()
         log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
@@ -190,23 +200,37 @@ def process_emails():
                                     elif detection_result is False:
                                         log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
                                         mail.store(email_id, '+FLAGS', '\\Deleted')
+                                        try:
+                                            mail.expunge()
+                                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()}.")
+                                        except Exception as e:
+                                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
                                     else:
                                         log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
-            except Exception as e:
+                # Ajouter un délai pour éviter de surcharger le serveur Gmail
+                time.sleep(0.5)
+            except (imaplib.IMAP4.error, socket.timeout) as e:
                 log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")
+                log_message("  Tentative de reconnexion IMAP...")
+                mail.logout()
+                mail = connect_to_imap()
+                if not mail:
+                    log_message("  Échec de la reconnexion IMAP. Arrêt du traitement.")
+                    return
                 continue
         
-        mail.expunge()
-        log_message("Expunge terminé.")
         mail.logout()
         log_message("Déconnexion IMAP réussie.")
         log_message("Analyse des emails terminée.")
-    except (imaplib.IMAP4.error, socket.timeout) as e:
-        log_message(f"  Erreur lors de la connexion ou du traitement des emails : {e}")
     except Exception as e:
         log_message(f"  Erreur inattendue lors du traitement des emails : {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        try:
+            mail.logout()
+        except:
+            pass
 
 # === HEALTH CHECK SERVER ===
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -249,7 +273,6 @@ def main():
     log_message(f"Emails envoyés de: {EMAIL_SENDER}")
     log_message("----------------------------------------------------")
 
-    # Démarrer le serveur de health check dans un thread séparé
     health_check_thread = threading.Thread(target=run_health_check_server, daemon=True)
     health_check_thread.start()
     log_message("Serveur de health check démarré. Début de la boucle principale...")
@@ -259,12 +282,12 @@ def main():
             log_message("--- Début d'une nouvelle exécution ---")
             process_emails()
             log_message("--- Fin de l'exécution, attente de 5 minutes ---")
-            time.sleep(300)  # Attendre 5 minutes avant la prochaine exécution
+            time.sleep(300)
         except Exception as e:
             log_message(f"Une erreur majeure est survenue dans main() : {e}")
             import traceback
             traceback.print_exc()
-            time.sleep(300)  # En cas d'erreur, attendre avant de réessayer
+            time.sleep(300)
 
 if __name__ == "__main__":
     main()

@@ -122,7 +122,6 @@ def process_emails():
         mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
         mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
         mail.select("inbox")
-        # Recherche tous les e-mails, puis filtrer par corps
         status, data = mail.search(None, "ALL")
         email_ids = data[0].split()
         if not email_ids:
@@ -131,31 +130,39 @@ def process_emails():
             status, msg_data = mail.fetch(email_id, "(RFC822)")
             raw_email = msg_data[0][1]
             msg = email.message_from_bytes(raw_email)
-            # Vérifier le corps du mail pour les mots-clés
             if msg.is_multipart():
+                body_found = False
                 for part in msg.walk():
                     if part.get_content_type() == 'text/plain':
-                        body = part.get_payload(decode=True).decode(part.get_content_charset('utf-8'))
-                        if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body:
-                            log_message(f"  📧 Email {email_id} contient un mot-clé dans le corps.")
-                            for attachment_part in msg.walk():
-                                if attachment_part.get_content_maintype() == 'multipart':
-                                    continue
-                                if attachment_part.get('Content-Disposition') and 'attachment' in attachment_part.get('Content-Disposition'):
-                                    filename = attachment_part.get_filename()
-                                    if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
-                                        log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id}...")
-                                        image_data = attachment_part.get_payload(decode=True)
-                                        img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
-                                        detection_result = detect_human(img_cv2)
-                                        if detection_result is True:
-                                            log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
-                                            send_email_alert(EMAIL_USER, image_data, filename)
-                                        elif detection_result is False:
-                                            log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
-                                            mail.store(email_id, '+FLAGS', '\\Deleted')
-                                        else:
-                                            log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
+                        try:
+                            charset = part.get_content_charset('utf-8')
+                            body = part.get_payload(decode=True).decode(charset, errors='replace')
+                            if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body:
+                                log_message(f"  📧 Email {email_id} contient un mot-clé dans le corps.")
+                                body_found = True
+                                break
+                        except (UnicodeDecodeError, AttributeError) as e:
+                            log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id}: {e}. Passage à l'attachement.")
+                            continue
+                if body_found:
+                    for attachment_part in msg.walk():
+                        if attachment_part.get_content_maintype() == 'multipart':
+                            continue
+                        if attachment_part.get('Content-Disposition') and 'attachment' in attachment_part.get('Content-Disposition'):
+                            filename = attachment_part.get_filename()
+                            if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
+                                log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id}...")
+                                image_data = attachment_part.get_payload(decode=True)
+                                img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
+                                detection_result = detect_human(img_cv2)
+                                if detection_result is True:
+                                    log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
+                                    send_email_alert(EMAIL_USER, image_data, filename)
+                                elif detection_result is False:
+                                    log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
+                                    mail.store(email_id, '+FLAGS', '\\Deleted')
+                                else:
+                                    log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
         mail.expunge()
         mail.logout()
         log_message("Analyse des emails terminée.")

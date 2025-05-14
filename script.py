@@ -209,7 +209,19 @@ def process_emails():
                                         except Exception as e:
                                             log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
                                     else:
-                                        log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
+                                        log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Suppression de l'email.")
+                                        mail.store(email_id, '+FLAGS', '\\Deleted')
+                                        try:
+                                            mail.expunge()
+                                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()} (image non valide).")
+                                        except Exception as e:
+                                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                                        try:
+                                            with open(f"/tmp/invalid_{filename}", "wb") as f:
+                                                f.write(image_data)
+                                            log_message(f"  Image invalide {filename} sauvegardée dans /tmp pour analyse.")
+                                        except Exception as e:
+                                            log_message(f"  Erreur lors de la sauvegarde de l'image invalide {filename}: {e}")
                 # Ajouter un délai pour éviter de surcharger le serveur Gmail
                 time.sleep(0.5)
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:

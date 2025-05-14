@@ -23,7 +23,7 @@ EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
 SMTP_PORT = 993
-IMAP_TIMEOUT = 60  # Timeout de 60 secondes
+IMAP_TIMEOUT = 120  # Timeout augmenté à 120 secondes
 
 # Fichiers YOLO
 YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
@@ -161,17 +161,23 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
 
 # === SURVEILLANCE DES EMAILS ===
 def connect_to_imap():
-    try:
-        mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
-        mail.socket().settimeout(IMAP_TIMEOUT)
-        log_message("Tentative de connexion à imap.gmail.com...")
-        mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
-        log_message("Connexion IMAP réussie. Sélection de la boîte inbox...")
-        mail.select("inbox")
-        return mail
-    except Exception as e:
-        log_message(f"  Erreur lors de la connexion IMAP : {e}")
-        return None
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
+            mail.socket().settimeout(IMAP_TIMEOUT)
+            log_message(f"Tentative de connexion à imap.gmail.com (essai {attempt + 1}/{max_retries})...")
+            mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
+            log_message("Connexion IMAP réussie. Sélection de la boîte inbox...")
+            mail.select("inbox")
+            return mail
+        except (imaplib.IMAP4.error, socket.timeout) as e:
+            log_message(f"  Erreur lors de la connexion IMAP (essai {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(5)  # Attendre 5 secondes avant de réessayer
+            else:
+                log_message("  Échec de la connexion IMAP après toutes les tentatives.")
+                return None
 
 def process_emails():
     log_message("Connexion à la boîte mail pour analyse...")
@@ -263,7 +269,7 @@ def process_emails():
                                         except Exception as e:
                                             log_message(f"  Erreur lors de la sauvegarde de l'image invalide {filename}: {e}")
                 # Ajouter un délai pour éviter de surcharger le serveur Gmail
-                time.sleep(0.5)
+                time.sleep(1)  # Augmenté à 1 seconde
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
                 log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")
                 log_message("  Tentative de reconnexion IMAP...")

@@ -1,1 +1,1 @@
-worker: python script.py
+python script.py

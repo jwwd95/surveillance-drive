@@ -28,6 +28,10 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 GOOGLE_CREDENTIALS_BASE64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
 DELETE_PROCESSED_FILES = os.environ.get('DELETE_PROCESSED_FILES', 'true').lower() == 'true'
 
+# Constantes pour IMAP (Gmail)
+SMTP_SERVER = "imap.gmail.com"  # Ajouté
+SMTP_PORT = 993  # Ajouté
+
 # Fichiers YOLO
 YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
 YOLO_CFG_FILE = "yolov3-tiny.cfg"
@@ -240,7 +244,7 @@ def process_images_from_drive():
 def process_emails():
     log_message("Connexion à la boîte mail pour analyse...")
     try:
-        mail = imaplib.IMAP4_SSL(SMTP_SERVER)
+        mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)  # Utilisation des constantes ajoutées
         mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
         mail.select("inbox")
         status, data = mail.search(None, '(SUBJECT "Alarm event: Motion DetectStart" SUBJECT "Alarm event: Human DetectEnd")')
@@ -266,12 +270,6 @@ def process_emails():
                             elif detection_result is False:
                                 log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
                                 mail.store(email_id, '+FLAGS', '\\Deleted')
-                                if DELETE_PROCESSED_FILES:
-                                    try:
-                                        # Supprimer l'attachment si possible (nécessite un accès au système de fichiers ou Drive)
-                                        log_message(f"  🗑️ Tentative de suppression de {filename}...")
-                                    except Exception as del_e:
-                                        log_message(f"  ⚠️ Échec de la suppression de {filename}: {del_e}")
                             else:
                                 log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
         mail.expunge()  # Supprime les e-mails marqués comme supprimés
@@ -291,7 +289,7 @@ def main():
         "DEST_EMAIL": RECIPIENT_EMAIL,
         "GOOGLE_CREDENTIALS_BASE64": GOOGLE_CREDENTIALS_BASE64,
         "FOLDER_ID": GDRIVE_FOLDER_ID,
-        "EMAIL_APP_PASSWORD": EMAIL_APP_PASSWORD  # Nouvelle variable
+        "EMAIL_APP_PASSWORD": EMAIL_APP_PASSWORD
     }
     missing_vars = [name for name, value in required_vars.items() if not value]
     if missing_vars:
@@ -314,8 +312,8 @@ def main():
     log_message("----------------------------------------------------")
 
     try:
-        process_images_from_drive()  # Conserver la fonctionnalité existante
-        process_emails()  # Ajouter la nouvelle fonctionnalité
+        process_images_from_drive()
+        process_emails()
     except Exception as e:
         log_message(f"Une erreur majeure est survenue dans main() : {e}")
         import traceback

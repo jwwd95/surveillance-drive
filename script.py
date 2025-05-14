@@ -10,6 +10,8 @@ import datetime
 import imaplib
 import email
 import socket
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # === CONFIGURATION via Variables d'Environnement ===
 RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL")
@@ -122,7 +124,7 @@ def process_emails():
     log_message("Connexion à la boîte mail pour analyse...")
     try:
         mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
-        mail.socket().settimeout(IMAP_TIMEOUT)  # Définir un timeout
+        mail.socket().settimeout(IMAP_TIMEOUT)
         mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
         mail.select("inbox")
         status, data = mail.search(None, "ALL")
@@ -176,9 +178,23 @@ def process_emails():
         import traceback
         traceback.print_exc()
 
-# === SCRIPT PRINCIPAL (pour Cron Job) ===
+# === HEALTH CHECK SERVER ===
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_health_check_server():
+    server_address = ('', 8000)
+    httpd = HTTPServer(server_address, HealthCheckHandler)
+    log_message("Démarrage du serveur de health check sur le port 8000...")
+    httpd.serve_forever()
+
+# === SCRIPT PRINCIPAL (pour boucle infinie) ===
 def main():
-    log_message("--- Démarrage du script de surveillance des emails ---")
+    log_message("--- Initialisation du script de surveillance des emails ---")
     required_vars = {
         "SENDER_EMAIL": EMAIL_SENDER,
         "APP_PASSWORD": EMAIL_PASSWORD,
@@ -200,14 +216,21 @@ def main():
     log_message(f"Emails envoyés de: {EMAIL_SENDER}")
     log_message("----------------------------------------------------")
 
-    try:
-        process_emails()
-    except Exception as e:
-        log_message(f"Une erreur majeure est survenue dans main() : {e}")
-        import traceback
-        traceback.print_exc()
+    # Démarrer le serveur de health check dans un thread séparé
+    health_check_thread = threading.Thread(target=run_health_check_server, daemon=True)
+    health_check_thread.start()
 
-    log_message("--- Fin du script de surveillance des emails ---")
+    while True:
+        try:
+            log_message("--- Début d'une nouvelle exécution ---")
+            process_emails()
+            log_message("--- Fin de l'exécution, attente de 5 minutes ---")
+            time.sleep(300)  # Attendre 5 minutes avant la prochaine exécution
+        except Exception as e:
+            log_message(f"Une erreur majeure est survenue dans main() : {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(300)  # En cas d'erreur, attendre avant de réessayer
 
 if __name__ == "__main__":
     main()

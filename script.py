@@ -10,11 +10,9 @@ from google.oauth2 import service_account
 from email.message import EmailMessage
 import time
 import base64
-import json
+import json # Importé pour json.loads et json.JSONDecodeError
 
 # === CONFIGURATION via Variables d'Environnement ===
-# Les valeurs par défaut sont fournies pour FOLDER_ID et DEST_EMAIL, 
-# mais elles seront écrasées par les variables d'environnement sur Koyeb.
 FOLDER_ID = os.environ.get("FOLDER_ID", "1Y-pZkH4S-XvF0UAfl3FmbEGxfGT6_Lxe") 
 DEST_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL") 
@@ -25,27 +23,58 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 GOOGLE_CREDENTIALS_BASE64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
 if not GOOGLE_CREDENTIALS_BASE64:
     print("ERREUR CRITIQUE: La variable d'environnement GOOGLE_CREDENTIALS_BASE64 n'est pas définie.")
-    exit(1) # Quitter si les credentials ne sont pas là
+    exit(1)
 
-CREDENTIALS_FILE_PATH = '/tmp/credentials.json' 
+# === INIT DRIVE API (avec débogage et from_service_account_info) ===
 try:
+    # 1. Décoder la chaîne Base64
     creds_json_str = base64.b64decode(GOOGLE_CREDENTIALS_BASE64).decode('utf-8')
-    with open(CREDENTIALS_FILE_PATH, 'w') as f:
-        f.write(creds_json_str)
-    print("Credentials Google chargés depuis la variable d'environnement.")
+    
+    # 2. Afficher des parties du JSON décodé pour vérification
+    print("--- Contenu JSON décodé (début, max 500 cars) ---")
+    print(creds_json_str[:500] + ("..." if len(creds_json_str) > 500 else ""))
+    print("--- Contenu JSON décodé (fin, max 500 cars) ---")
+    if len(creds_json_str) > 500:
+        print("..." + creds_json_str[-500:])
+    else:
+        print(creds_json_str) # Si plus court, afficher tout
+    
+    # 3. Parser le JSON en un dictionnaire Python
+    creds_info = json.loads(creds_json_str) 
+    
+    # 4. Vérifier et afficher le début de la clé privée
+    if 'private_key' in creds_info:
+        print("--- Clé privée extraite (début, max 100 cars) ---")
+        pk_str = creds_info['private_key']
+        print(pk_str[:100] + ("..." if len(pk_str) > 100 else ""))
+        print("--- Clé privée extraite (fin, max 100 cars) ---")
+        if len(pk_str) > 100:
+            print("..." + pk_str[-100:])
+        else:
+            print(pk_str)
+    else:
+        print("AVERTISSEMENT CRITIQUE: 'private_key' non trouvée dans les credentials JSON décodés!")
+        exit(1) # Quitter si la clé privée est manquante
+
+    # 5. Charger les credentials directement depuis le dictionnaire
+    credentials = service_account.Credentials.from_service_account_info(
+        creds_info, scopes=SCOPES)
+    service = build('drive', 'v3', credentials=credentials)
+    print("API Google Drive initialisée avec succès (via from_service_account_info).")
+
+except json.JSONDecodeError as e:
+    print(f"ERREUR CRITIQUE: Erreur de décodage JSON des credentials : {e}")
+    print(f"  Message: {e.msg}")
+    print(f"  Document (extrait autour de l'erreur): '{e.doc[max(0,e.pos-30):e.pos+30]}'")
+    print(f"  Position: ligne {e.lineno}, colonne {e.colno} (index {e.pos})")
+    exit(1)
 except Exception as e:
-    print(f"ERREUR CRITIQUE: Erreur lors du décodage ou de l'écriture des credentials : {e}")
+    print(f"ERREUR CRITIQUE: Erreur lors du chargement/initialisation des credentials ou de l'API Drive : {e}")
+    # Afficher la trace complète pour plus de détails en cas d'erreur inattendue
+    import traceback
+    traceback.print_exc()
     exit(1)
 
-# === INIT DRIVE API ===
-try:
-    credentials = service_account.Credentials.from_service_account_file(
-        CREDENTIALS_FILE_PATH, scopes=SCOPES)
-    service = build('drive', 'v3', credentials=credentials)
-    print("API Google Drive initialisée avec succès.")
-except Exception as e:
-    print(f"ERREUR CRITIQUE: Erreur lors de l'initialisation de l'API Drive : {e}")
-    exit(1)
 
 # === CHARGER YOLO ===
 YOLO_WEIGHTS_PATH = "yolov3-tiny.weights"
@@ -61,7 +90,6 @@ if not os.path.exists(YOLO_CFG_PATH):
 try:
     net = cv2.dnn.readNet(YOLO_WEIGHTS_PATH, YOLO_CFG_PATH)
     layer_names = net.getLayerNames()
-    # Correction pour les versions d'OpenCV
     try:
         output_layers_indices = net.getUnconnectedOutLayers().flatten()
     except AttributeError: 
@@ -95,7 +123,7 @@ def detect_human(image_cv2):
             scores = detection[5:]
             class_id = np.argmax(scores)
             confidence = scores[class_id]
-            if class_id == 0 and confidence > 0.5:  # 0 = person (COCO dataset)
+            if class_id == 0 and confidence > 0.5:
                 return True
     return False
 
@@ -139,11 +167,14 @@ def process_images():
         results = service.files().list(
             q=f"'{FOLDER_ID}' in parents and (mimeType='image/jpeg' or mimeType='image/png' or mimeType='image/webp')",
             fields="files(id, name, createdTime)",
-            orderBy="createdTime" # Traiter les plus anciens d'abord
+            orderBy="createdTime"
         ).execute()
         files = results.get('files', [])
     except Exception as e:
         print(f"Erreur lors de la récupération de la liste des fichiers Drive : {e}")
+        # Afficher la trace complète pour plus de détails en cas d'erreur
+        import traceback
+        traceback.print_exc()
         return
 
     if not files:
@@ -175,15 +206,13 @@ def process_images():
                 continue
 
             if detect_human(img_cv2):
-                # Créer un nom de fichier temporaire sûr dans /tmp
-                # S'assurer que le format est .jpg pour une compatibilité maximale
                 base, ext = os.path.splitext(file_name)
-                safe_file_name = "".join(c if c.isalnum() or c in ['.', '_', '-'] else '_' for c in base) # Nettoyer le nom
-                temp_image_path = f"/tmp/{safe_file_name}.jpg"
+                safe_file_name = "".join(c if c.isalnum() or c in ['.', '_', '-'] else '_' for c in base)
+                temp_image_path = f"/tmp/{safe_file_name}.jpg" # Utiliser /tmp, inscriptible dans Docker
                 
                 cv2.imwrite(temp_image_path, img_cv2)
                 print(f"  ✅ Humain détecté dans {file_name}. Envoi de l’image par mail.")
-                send_email_with_image(DEST_EMAIL, temp_image_path, file_name) # Passer le nom original pour le sujet de l'email
+                send_email_with_image(DEST_EMAIL, temp_image_path, file_name)
                 os.remove(temp_image_path) 
             else:
                 print(f"  ❌ Aucun humain détecté dans {file_name}.")
@@ -195,22 +224,17 @@ def process_images():
 
         except Exception as e:
             print(f"  Erreur lors du traitement du fichier {file_name} (ID: {file_id}): {e}")
-            # Optionnel: supprimer quand même en cas d'erreur pour éviter les boucles
-            # try:
-            #     service.files().delete(fileId=file_id).execute()
-            #     print(f"  Image {file_name} supprimée de Drive après erreur de traitement.")
-            # except Exception as del_e:
-            #     print(f"  Impossible de supprimer {file_name} après erreur: {del_e}")
+            import traceback
+            traceback.print_exc()
     
     if processed_files_count > 0:
         print(f"{processed_files_count} image(s) traitée(s).")
 
-
 if __name__ == "__main__":
     if not SENDER_EMAIL or not APP_PASSWORD:
-        print("AVERTISSEMENT CRITIQUE: SENDER_EMAIL ou APP_PASSWORD ne sont pas définis dans les variables d'environnement. L'envoi d'email ne fonctionnera pas.")
+        print("AVERTISSEMENT CRITIQUE: SENDER_EMAIL ou APP_PASSWORD ne sont pas définis. L'envoi d'email ne fonctionnera pas.")
     
-    CHECK_INTERVAL_SECONDS = 90 # 1.5 minutes * 60 secondes
+    CHECK_INTERVAL_SECONDS = 90
     print("--- Démarrage du script de surveillance Caméra FR ---")
     print(f"Vérification toutes les {CHECK_INTERVAL_SECONDS / 60} minutes.")
     print(f"Dossier Drive surveillé ID: {FOLDER_ID}")
@@ -223,7 +247,10 @@ if __name__ == "__main__":
             process_images()
         except Exception as e:
             print(f"Une erreur majeure est survenue dans la boucle principale : {e}")
+            import traceback
+            traceback.print_exc()
             print("Reprise après une courte pause...")
         
-        print(f"Prochaine vérification dans {CHECK_INTERVAL_SECONDS / 60:.1f} minutes ({time.strftime('%H:%M:%S', time.localtime(time.time() + CHECK_INTERVAL_SECONDS))}).")
+        current_time_plus_interval = time.time() + CHECK_INTERVAL_SECONDS
+        print(f"Prochaine vérification dans {CHECK_INTERVAL_SECONDS / 60:.1f} minutes (vers {time.strftime('%H:%M:%S', time.localtime(current_time_plus_interval))}).")
         time.sleep(CHECK_INTERVAL_SECONDS)

@@ -9,6 +9,7 @@ import time
 import datetime
 import imaplib
 import email
+import socket
 
 # === CONFIGURATION via Variables d'Environnement ===
 RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL")
@@ -20,6 +21,7 @@ EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
 SMTP_PORT = 993
+IMAP_TIMEOUT = 30  # Timeout de 30 secondes pour la connexion
 
 # Fichiers YOLO
 YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
@@ -120,6 +122,7 @@ def process_emails():
     log_message("Connexion à la boîte mail pour analyse...")
     try:
         mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
+        mail.socket().settimeout(IMAP_TIMEOUT)  # Définir un timeout
         mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
         mail.select("inbox")
         status, data = mail.search(None, "ALL")
@@ -166,8 +169,10 @@ def process_emails():
         mail.expunge()
         mail.logout()
         log_message("Analyse des emails terminée.")
-    except Exception as e:
+    except (imaplib.IMAP4.error, socket.timeout) as e:
         log_message(f"  Erreur lors de la connexion ou du traitement des emails : {e}")
+    except Exception as e:
+        log_message(f"  Erreur inattendue lors du traitement des emails : {e}")
         import traceback
         traceback.print_exc()
 

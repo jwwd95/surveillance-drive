@@ -69,6 +69,24 @@ def load_yolo_model():
         return False
 
 # === FONCTIONS DE TRAITEMENT ===
+def preprocess_image(image_cv2):
+    """Prétraite l'image pour améliorer la détection YOLO."""
+    if image_cv2 is None:
+        return None
+    # Ajustement du contraste
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    if len(image_cv2.shape) == 3:  # Image couleur
+        lab = cv2.cvtColor(image_cv2, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l = clahe.apply(l)
+        lab = cv2.merge((l, a, b))
+        image_cv2 = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    else:  # Image en niveaux de gris
+        image_cv2 = clahe.apply(image_cv2)
+    # Normalisation
+    image_cv2 = cv2.normalize(image_cv2, None, 0, 255, cv2.NORM_MINMAX)
+    return image_cv2
+
 def detect_human(image_cv2, image_name_for_log):
     if image_cv2 is None:
         log_message(f"  Image non valide reçue pour la détection ({image_name_for_log}).")
@@ -77,6 +95,13 @@ def detect_human(image_cv2, image_name_for_log):
     if height == 0 or width == 0:
         log_message(f"  Image vide reçue pour la détection ({image_name_for_log}, dimensions: {height}x{width}).")
         return None
+    
+    # Prétraitement de l'image
+    image_cv2 = preprocess_image(image_cv2)
+    if image_cv2 is None:
+        log_message(f"  Échec du prétraitement pour l'image ({image_name_for_log}).")
+        return None
+
     blob = cv2.dnn.blobFromImage(image_cv2, 1/255.0, (416, 416), swapRB=True, crop=False)
     yolo_net.setInput(blob)
     try:
@@ -89,7 +114,7 @@ def detect_human(image_cv2, image_name_for_log):
             scores = detection[5:]
             class_id_index = np.argmax(scores)
             confidence = scores[class_id_index]
-            if class_id_index < len(yolo_classes) and yolo_classes[class_id_index] == 'person' and confidence > 0.5:
+            if class_id_index < len(yolo_classes) and yolo_classes[class_id_index] == 'person' and confidence > 0.3:  # Seuil abaissé à 0.3
                 return True
     return False
 
@@ -179,7 +204,7 @@ def process_emails():
                             try:
                                 charset = part.get_content_charset('utf-8')
                                 body = part.get_payload(decode=True).decode(charset, errors='replace')
-                                if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body:
+                                if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body or "Alarm event: Motion DetectEnd" in body:
                                     log_message(f"  📧 Email {email_id.decode()} contient un mot-clé dans le corps.")
                                     body_found = True
                                     break
@@ -187,6 +212,17 @@ def process_emails():
                                 log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
                                 continue
                     if body_found:
+                        # Vérifier si le mot-clé est "Motion DetectEnd" pour suppression immédiate
+                        if "Alarm event: Motion DetectEnd" in body:
+                            log_message(f"  📧 Email {email_id.decode()} contient 'Alarm event: Motion DetectEnd'. Suppression immédiate.")
+                            mail.store(email_id, '+FLAGS', '\\Deleted')
+                            try:
+                                mail.expunge()
+                                log_message(f"  Suppression confirmée pour l'email {email_id.decode()} (Motion DetectEnd).")
+                            except Exception as e:
+                                log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                            continue
+                        # Sinon, procéder à la détection d'humains
                         for attachment_part in msg.walk():
                             if attachment_part.get_content_maintype() == 'multipart':
                                 continue

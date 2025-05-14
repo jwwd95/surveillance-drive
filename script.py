@@ -164,10 +164,13 @@ def process_emails():
             try:
                 log_message(f"Fetching email ID: {email_id.decode()}")
                 status, msg_data = mail.fetch(email_id, "(RFC822)")
-                if status != 'OK':
-                    log_message(f"  Échec de la récupération de l'email {email_id.decode()}: statut {status}")
+                if status != 'OK' or not msg_data or len(msg_data) < 2 or msg_data[0] is None:
+                    log_message(f"  Échec de la récupération de l'email {email_id.decode()}: statut {status} ou données invalides")
                     continue
                 raw_email = msg_data[0][1]
+                if not isinstance(raw_email, bytes):
+                    log_message(f"  Données invalides pour l'email {email_id.decode()} : type {type(raw_email)}, valeur {raw_email}")
+                    continue
                 msg = email.message_from_bytes(raw_email)
                 if msg.is_multipart():
                     body_found = False
@@ -209,7 +212,7 @@ def process_emails():
                                         log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
                 # Ajouter un délai pour éviter de surcharger le serveur Gmail
                 time.sleep(0.5)
-            except (imaplib.IMAP4.error, socket.timeout) as e:
+            except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
                 log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")
                 log_message("  Tentative de reconnexion IMAP...")
                 mail.logout()

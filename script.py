@@ -23,7 +23,7 @@ EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
 SMTP_PORT = 993
-IMAP_TIMEOUT = 30  # Timeout de 30 secondes pour la connexion
+IMAP_TIMEOUT = 60  # Augmenter le timeout à 60 secondes
 
 # Fichiers YOLO
 YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
@@ -69,20 +69,20 @@ def load_yolo_model():
         return False
 
 # === FONCTIONS DE TRAITEMENT ===
-def detect_human(image_cv2):
+def detect_human(image_cv2, image_name_for_log):
     if image_cv2 is None:
-        log_message("  Image non valide reçue pour la détection.")
+        log_message(f"  Image non valide reçue pour la détection ({image_name_for_log}).")
         return None
     height, width = image_cv2.shape[:2]
     if height == 0 or width == 0:
-        log_message("  Image vide reçue pour la détection.")
+        log_message(f"  Image vide reçue pour la détection ({image_name_for_log}, dimensions: {height}x{width}).")
         return None
     blob = cv2.dnn.blobFromImage(image_cv2, 1/255.0, (416, 416), swapRB=True, crop=False)
     yolo_net.setInput(blob)
     try:
         outputs = yolo_net.forward(yolo_output_layers)
     except Exception as e:
-        log_message(f"  Erreur pendant la propagation avant (forward pass) YOLO: {e}")
+        log_message(f"  Erreur pendant la propagation avant (forward pass) YOLO pour {image_name_for_log}: {e}")
         return None
     for output in outputs:
         for detection in output:
@@ -103,14 +103,27 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
     msg['To'] = recipient_email
     body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email).'
     msg.attach(MIMEText(body_text, 'plain'))
+    
     if image_bytes_for_attachment:
         try:
-            subtype = 'jpeg' if image_name_for_email.lower().endswith(('.jpg', '.jpeg')) else 'png'
-            img_mime = MIMEImage(image_bytes_for_attachment, subtype=subtype, name=os.path.basename(image_name_for_email))
+            log_message(f"  Taille des données de l'image {image_name_for_email}: {len(image_bytes_for_attachment)} octets")
+            # Forcer le sous-type MIME en fonction de l'extension
+            if image_name_for_email.lower().endswith(('.jpg', '.jpeg')):
+                subtype = 'jpeg'
+            elif image_name_for_email.lower().endswith('.png'):
+                subtype = 'png'
+            else:
+                subtype = 'jpeg'  # Par défaut, on suppose JPEG
+            log_message(f"  Sous-type MIME déterminé pour {image_name_for_email}: {subtype}")
+            img_mime = MIMEImage(image_bytes_for_attachment, _subtype=subtype)
             img_mime.add_header('Content-Disposition', 'attachment', filename=os.path.basename(image_name_for_email))
             msg.attach(img_mime)
+            log_message(f"  Image {image_name_for_email} attachée avec succès à l'e-mail.")
         except Exception as e:
             log_message(f"  Erreur lors de l'attachement de l'image {image_name_for_email}: {e}")
+            # Envoyer l'e-mail sans l'image
+            body_text += f"\n(Erreur lors de l'attachement de l'image : {str(e)})"
+            msg.attach(MIMEText(body_text, 'plain'))
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
@@ -129,51 +142,60 @@ def process_emails():
         mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
         log_message("Connexion IMAP réussie. Sélection de la boîte inbox...")
         mail.select("inbox")
-        # Limiter aux e-mails des dernières 24 heures
-        since_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
+        # Limiter aux e-mails des dernières 12 heures
+        since_date = (datetime.datetime.now() - datetime.timedelta(hours=12)).strftime("%d-%b-%Y")
         status, data = mail.search(None, f'SINCE "{since_date}"')
         email_ids = data[0].split()
         log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
         if not email_ids:
             log_message("  Aucun email trouvé dans la boîte.")
+        
         for email_id in email_ids:
-            log_message(f"Fetching email ID: {email_id.decode()}")
-            status, msg_data = mail.fetch(email_id, "(RFC822)")
-            raw_email = msg_data[0][1]
-            msg = email.message_from_bytes(raw_email)
-            if msg.is_multipart():
-                body_found = False
-                for part in msg.walk():
-                    if part.get_content_type() == 'text/plain':
-                        try:
-                            charset = part.get_content_charset('utf-8')
-                            body = part.get_payload(decode=True).decode(charset, errors='replace')
-                            if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body:
-                                log_message(f"  📧 Email {email_id.decode()} contient un mot-clé dans le corps.")
-                                body_found = True
-                                break
-                        except (UnicodeDecodeError, AttributeError) as e:
-                            log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
-                            continue
-                if body_found:
-                    for attachment_part in msg.walk():
-                        if attachment_part.get_content_maintype() == 'multipart':
-                            continue
-                        if attachment_part.get('Content-Disposition') and 'attachment' in attachment_part.get('Content-Disposition'):
-                            filename = attachment_part.get_filename()
-                            if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
-                                log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id.decode()}...")
-                                image_data = attachment_part.get_payload(decode=True)
-                                img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
-                                detection_result = detect_human(img_cv2)
-                                if detection_result is True:
-                                    log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
-                                    send_email_alert(EMAIL_USER, image_data, filename)
-                                elif detection_result is False:
-                                    log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
-                                    mail.store(email_id, '+FLAGS', '\\Deleted')
-                                else:
-                                    log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
+            try:
+                log_message(f"Fetching email ID: {email_id.decode()}")
+                status, msg_data = mail.fetch(email_id, "(RFC822)")
+                if status != 'OK':
+                    log_message(f"  Échec de la récupération de l'email {email_id.decode()}: statut {status}")
+                    continue
+                raw_email = msg_data[0][1]
+                msg = email.message_from_bytes(raw_email)
+                if msg.is_multipart():
+                    body_found = False
+                    for part in msg.walk():
+                        if part.get_content_type() == 'text/plain':
+                            try:
+                                charset = part.get_content_charset('utf-8')
+                                body = part.get_payload(decode=True).decode(charset, errors='replace')
+                                if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body:
+                                    log_message(f"  📧 Email {email_id.decode()} contient un mot-clé dans le corps.")
+                                    body_found = True
+                                    break
+                            except (UnicodeDecodeError, AttributeError) as e:
+                                log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
+                                continue
+                    if body_found:
+                        for attachment_part in msg.walk():
+                            if attachment_part.get_content_maintype() == 'multipart':
+                                continue
+                            if attachment_part.get('Content-Disposition') and 'attachment' in attachment_part.get('Content-Disposition'):
+                                filename = attachment_part.get_filename()
+                                if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
+                                    log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id.decode()}...")
+                                    image_data = attachment_part.get_payload(decode=True)
+                                    img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
+                                    detection_result = detect_human(img_cv2, filename)
+                                    if detection_result is True:
+                                        log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
+                                        send_email_alert(EMAIL_USER, image_data, filename)
+                                    elif detection_result is False:
+                                        log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
+                                        mail.store(email_id, '+FLAGS', '\\Deleted')
+                                    else:
+                                        log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
+            except Exception as e:
+                log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")
+                continue
+        
         mail.expunge()
         log_message("Expunge terminé.")
         mail.logout()

@@ -7,250 +7,325 @@ import numpy as np
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
-from email.message import EmailMessage
+from email.message import EmailMessage # Vous utilisiez ceci, c'est bien
+from email.mime.image import MIMEImage # Alternative pour attachement direct
+from email.mime.multipart import MIMEMultipart # Nécessaire si on combine texte et image
+from email.mime.text import MIMEText      # Nécessaire pour le corps du texte avec MIMEMultipart
 import time
 import base64
-import json # Importé pour json.loads et json.JSONDecodeError
+import json
+import datetime # Pour les logs et le processed_log
 
 # === CONFIGURATION via Variables d'Environnement ===
-FOLDER_ID = os.environ.get("FOLDER_ID", "1Y-pZkH4S-XvF0UAfl3FmbEGxfGT6_Lxe") 
-DEST_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL") 
-APP_PASSWORD = os.environ.get("APP_PASSWORD") 
-SCOPES = ['https://www.googleapis.com/auth/drive']
+GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "1Y-pZkH4S-XvF0UAfl3FmbEGxfGT6_Lxe") 
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "JalFatimi@gmail.com") # Renommé pour la cohérence
+EMAIL_SENDER = os.environ.get("EMAIL_SENDER") 
+EMAIL_PASSWORD = os.environ.get("APP_PASSWORD") # APP_PASSWORD est le bon nom que vous utilisiez
+SCOPES = ['https://www.googleapis.com/auth/drive'] # Accès complet nécessaire pour la suppression
 
-# Gestion de credentials.json via variable d'environnement
 GOOGLE_CREDENTIALS_BASE64 = os.environ.get('GOOGLE_CREDENTIALS_BASE64')
-if not GOOGLE_CREDENTIALS_BASE64:
-    print("ERREUR CRITIQUE: La variable d'environnement GOOGLE_CREDENTIALS_BASE64 n'est pas définie.")
-    exit(1)
 
-# === INIT DRIVE API (avec débogage et from_service_account_info) ===
-try:
-    # 1. Décoder la chaîne Base64
-    creds_json_str = base64.b64decode(GOOGLE_CREDENTIALS_BASE64).decode('utf-8')
-    
-    # 2. Afficher des parties du JSON décodé pour vérification
-    print("--- Contenu JSON décodé (début, max 500 cars) ---")
-    print(creds_json_str[:500] + ("..." if len(creds_json_str) > 500 else ""))
-    print("--- Contenu JSON décodé (fin, max 500 cars) ---")
-    if len(creds_json_str) > 500:
-        print("..." + creds_json_str[-500:])
-    else:
-        print(creds_json_str) # Si plus court, afficher tout
-    
-    # 3. Parser le JSON en un dictionnaire Python
-    creds_info = json.loads(creds_json_str) 
-    
-    # 4. Vérifier et afficher le début de la clé privée
-    if 'private_key' in creds_info:
-        print("--- Clé privée extraite (début, max 100 cars) ---")
-        pk_str = creds_info['private_key']
-        print(pk_str[:100] + ("..." if len(pk_str) > 100 else ""))
-        print("--- Clé privée extraite (fin, max 100 cars) ---")
-        if len(pk_str) > 100:
-            print("..." + pk_str[-100:])
-        else:
-            print(pk_str)
-    else:
-        print("AVERTISSEMENT CRITIQUE: 'private_key' non trouvée dans les credentials JSON décodés!")
-        exit(1) # Quitter si la clé privée est manquante
+# Comportement de suppression
+DELETE_PROCESSED_FILES = os.environ.get('DELETE_PROCESSED_FILES', 'true').lower() == 'true'
 
-    # 5. Charger les credentials directement depuis le dictionnaire
-    credentials = service_account.Credentials.from_service_account_info(
-        creds_info, scopes=SCOPES)
-    service = build('drive', 'v3', credentials=credentials)
-    print("API Google Drive initialisée avec succès (via from_service_account_info).")
+# Fichiers YOLO
+YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
+YOLO_CFG_FILE = "yolov3-tiny.cfg"
+COCO_NAMES_FILE = "coco.names" # Assurez-vous que ce fichier existe et contient les classes, "person" doit être dedans.
 
-except json.JSONDecodeError as e:
-    print(f"ERREUR CRITIQUE: Erreur de décodage JSON des credentials : {e}")
-    print(f"  Message: {e.msg}")
-    print(f"  Document (extrait autour de l'erreur): '{e.doc[max(0,e.pos-30):e.pos+30]}'")
-    print(f"  Position: ligne {e.lineno}, colonne {e.colno} (index {e.pos})")
-    exit(1)
-except Exception as e:
-    print(f"ERREUR CRITIQUE: Erreur lors du chargement/initialisation des credentials ou de l'API Drive : {e}")
-    # Afficher la trace complète pour plus de détails en cas d'erreur inattendue
-    import traceback
-    traceback.print_exc()
-    exit(1)
+PROCESSED_LOG_FILE = "processed_log.txt" # Pour se souvenir des fichiers traités
 
+# Variables globales pour le service Drive et le modèle YOLO
+gdrive_service = None
+yolo_net = None
+yolo_output_layers = None
+yolo_classes = None # Les noms des classes YOLO
 
-# === CHARGER YOLO ===
-YOLO_WEIGHTS_PATH = "yolov3-tiny.weights"
-YOLO_CFG_PATH = "yolov3-tiny.cfg"
+# === FONCTIONS UTILITAIRES ===
+def log_message(message):
+    print(f"[{datetime.datetime.now(datetime.timezone.utc).isoformat()}] {message}", flush=True)
 
-if not os.path.exists(YOLO_WEIGHTS_PATH):
-    print(f"ERREUR CRITIQUE: Fichier de poids YOLO non trouvé : {YOLO_WEIGHTS_PATH}")
-    exit(1)
-if not os.path.exists(YOLO_CFG_PATH):
-    print(f"ERREUR CRITIQUE: Fichier de configuration YOLO non trouvé : {YOLO_CFG_PATH}")
-    exit(1)
-
-try:
-    net = cv2.dnn.readNet(YOLO_WEIGHTS_PATH, YOLO_CFG_PATH)
-    layer_names = net.getLayerNames()
+# === INITIALISATION ===
+def initialize_drive_api():
+    global gdrive_service
+    if not GOOGLE_CREDENTIALS_BASE64:
+        log_message("ERREUR CRITIQUE: La variable d'environnement GOOGLE_CREDENTIALS_BASE64 n'est pas définie.")
+        return False
     try:
-        output_layers_indices = net.getUnconnectedOutLayers().flatten()
-    except AttributeError: 
-        output_layers_indices = net.getUnconnectedOutLayers()
-    output_layers = [layer_names[i - 1] for i in output_layers_indices]
-    print("Modèle YOLO chargé avec succès.")
-except Exception as e:
-    print(f"ERREUR CRITIQUE: Erreur lors du chargement du modèle YOLO : {e}")
-    exit(1)
+        creds_json_str = base64.b64decode(GOOGLE_CREDENTIALS_BASE64).decode('utf-8')
+        # log_message("--- Contenu JSON décodé (extrait) ---")
+        # log_message(creds_json_str[:200] + "..." + creds_json_str[-200:]) # Log plus concis
+        creds_info = json.loads(creds_json_str)
+        
+        # if 'private_key' in creds_info:
+        #     log_message("--- Clé privée extraite (info de présence uniquement) ---")
+        # else:
+        #     log_message("AVERTISSEMENT: 'private_key' non trouvée dans les credentials JSON décodés!")
+        #     return False
 
-# === FONCTION : détecter humain ===
+        credentials = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+        gdrive_service = build('drive', 'v3', credentials=credentials)
+        log_message("API Google Drive initialisée avec succès.")
+        return True
+    except json.JSONDecodeError as e:
+        log_message(f"ERREUR CRITIQUE: Erreur de décodage JSON des credentials : {e.msg} at pos {e.pos}")
+        return False
+    except Exception as e:
+        log_message(f"ERREUR CRITIQUE: Erreur lors de l'initialisation de l'API Drive : {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def load_yolo_model():
+    global yolo_net, yolo_output_layers, yolo_classes
+    if not all(os.path.exists(f) for f in [YOLO_WEIGHTS_FILE, YOLO_CFG_FILE, COCO_NAMES_FILE]):
+        log_message(f"ERREUR CRITIQUE: Un ou plusieurs fichiers YOLO sont manquants ({YOLO_WEIGHTS_FILE}, {YOLO_CFG_FILE}, {COCO_NAMES_FILE}).")
+        return False
+    try:
+        yolo_net = cv2.dnn.readNet(YOLO_WEIGHTS_FILE, YOLO_CFG_FILE)
+        layer_names = yolo_net.getLayerNames()
+        
+        # Gestion de getUnconnectedOutLayers pour différentes versions d'OpenCV
+        try:
+            unconnected_out_layers = yolo_net.getUnconnectedOutLayers()
+            if isinstance(unconnected_out_layers, np.ndarray) and unconnected_out_layers.ndim == 1: # Ex: array([200, 227, 254])
+                yolo_output_layers = [layer_names[i - 1] for i in unconnected_out_layers]
+            elif isinstance(unconnected_out_layers, np.ndarray) and unconnected_out_layers.ndim == 2: # Ex: array([[200], [227], [254]])
+                yolo_output_layers = [layer_names[i[0] - 1] for i in unconnected_out_layers]
+            else: # Fallback si c'est une liste d'indices ou autre format
+                yolo_output_layers = [layer_names[i - 1] for i in unconnected_out_layers]
+        except AttributeError: # Pour les très anciennes versions d'OpenCV
+             yolo_output_layers = [layer_names[i[0] - 1] for i in yolo_net.getUnconnectedOutLayers()]
+
+
+        with open(COCO_NAMES_FILE, 'r') as f:
+            yolo_classes = [line.strip() for line in f.readlines()]
+        if 'person' not in yolo_classes:
+            log_message("ERREUR CRITIQUE: La classe 'person' n'est pas trouvée dans coco.names. La détection d'humain échouera.")
+            return False
+        log_message("Modèle YOLO chargé avec succès.")
+        return True
+    except Exception as e:
+        log_message(f"ERREUR CRITIQUE: Erreur lors du chargement du modèle YOLO : {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# === FONCTIONS DE TRAITEMENT ===
 def detect_human(image_cv2):
     if image_cv2 is None:
-        print("Image non valide reçue pour la détection.")
-        return False
+        log_message("  Image non valide reçue pour la détection.")
+        return False # False pour "pas d'humain", None pour "erreur de détection"
+    
     height, width = image_cv2.shape[:2]
     if height == 0 or width == 0:
-        print("Image vide reçue pour la détection.")
+        log_message("  Image vide reçue pour la détection.")
         return False
 
     blob = cv2.dnn.blobFromImage(image_cv2, 1/255.0, (416, 416), swapRB=True, crop=False)
-    net.setInput(blob)
+    yolo_net.setInput(blob)
     try:
-        outputs = net.forward(output_layers)
+        outputs = yolo_net.forward(yolo_output_layers)
     except Exception as e:
-        print(f"Erreur pendant la propagation avant (forward pass) YOLO: {e}")
-        return False
+        log_message(f"  Erreur pendant la propagation avant (forward pass) YOLO: {e}")
+        return None # Indique une erreur pendant la détection
 
     for output in outputs:
         for detection in output:
             scores = detection[5:]
-            class_id = np.argmax(scores)
-            confidence = scores[class_id]
-            if class_id == 0 and confidence > 0.5:
-                return True
-    return False
+            class_id_index = np.argmax(scores)
+            confidence = scores[class_id_index]
+            # Assurez-vous que class_id_index est dans les limites de yolo_classes
+            if class_id_index < len(yolo_classes) and yolo_classes[class_id_index] == 'person' and confidence > 0.5:
+                return True # Humain détecté
+    return False # Aucun humain détecté
 
-# === FONCTION : envoyer mail ===
-def send_email_with_image(to_email, image_path, image_name_for_email):
-    if not SENDER_EMAIL or not APP_PASSWORD:
-        print("AVERTISSEMENT: SENDER_EMAIL ou APP_PASSWORD non configurés. Impossible d'envoyer l'email.")
+def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        log_message("  AVERTISSEMENT: EMAIL_SENDER ou EMAIL_PASSWORD non configurés. Impossible d'envoyer l'email.")
         return
 
-    msg = EmailMessage()
+    # Utiliser MIMEMultipart pour une meilleure compatibilité et structure
+    msg = MIMEMultipart()
     msg['Subject'] = f'🛑 Humain détecté sur l’image: {image_name_for_email}'
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = to_email
-    msg.set_content(f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (dossier caméra_FR).')
+    msg['From'] = EMAIL_SENDER
+    msg['To'] = recipient_email
+    
+    body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (dossier Google Drive ID: {GDRIVE_FOLDER_ID}).'
+    msg.attach(MIMEText(body_text, 'plain'))
 
+    if image_bytes_for_attachment:
+        try:
+            # Déterminer le type MIME principal et secondaire
+            # Pour les images JPEG ou PNG, c'est simple
+            maintype = 'image'
+            subtype = 'jpeg' if image_name_for_email.lower().endswith(('.jpg', '.jpeg')) else 'png'
+            # Si vous voulez être plus générique (moins sûr):
+            # ctype, _ = mimetypes.guess_type(image_name_for_email)
+            # if ctype is None or ctype.split('/')[0] != 'image':
+            #     maintype, subtype = 'application', 'octet-stream' # Fallback
+            # else:
+            #     maintype, subtype = ctype.split('/', 1)
+            
+            img_mime = MIMEImage(image_bytes_for_attachment, subtype=subtype, name=os.path.basename(image_name_for_email))
+            img_mime.add_header('Content-Disposition', 'attachment', filename=os.path.basename(image_name_for_email))
+            msg.attach(img_mime)
+        except Exception as e:
+            log_message(f"  Erreur lors de l'attachement de l'image {image_name_for_email}: {e}")
+            # Continuer sans l'image si l'attachement échoue
+    
     try:
-        with open(image_path, 'rb') as f:
-            img_data = f.read()
-        
-        ctype, encoding = mimetypes.guess_type(image_path)
-        if ctype is None or encoding is not None:
-            ctype = 'application/octet-stream' 
-        maintype, subtype = ctype.split('/', 1)
-        
-        msg.add_attachment(img_data, maintype=maintype, subtype=subtype, filename=os.path.basename(image_path))
-
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(SENDER_EMAIL, APP_PASSWORD)
+            smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
             smtp.send_message(msg)
-        print(f"Email envoyé avec succès à {to_email} pour l'image {image_name_for_email}")
-    except FileNotFoundError:
-        print(f"Erreur: Fichier image {image_path} non trouvé pour l'envoi par email.")
+        log_message(f"  Email envoyé avec succès à {recipient_email} pour l'image {image_name_for_email}")
     except Exception as e:
-        print(f"Erreur lors de l'envoi de l'email : {e}")
+        log_message(f"  Erreur lors de l'envoi de l'email : {e}")
 
-# === TRAITER CHAQUE IMAGE ===
-def process_images():
-    print(f"Vérification du dossier Google Drive ID: {FOLDER_ID}")
-    processed_files_count = 0
+def load_processed_log():
+    processed = set()
+    if os.path.exists(PROCESSED_LOG_FILE):
+        with open(PROCESSED_LOG_FILE, 'r') as f:
+            for line in f:
+                processed.add(line.strip())
+    return processed
+
+def save_to_processed_log(file_id):
+    with open(PROCESSED_LOG_FILE, 'a') as f:
+        f.write(f"{file_id}\n")
+
+def process_images_from_drive():
+    global gdrive_service
+    log_message(f"Vérification du dossier Google Drive ID: {GDRIVE_FOLDER_ID}")
+    
+    processed_file_ids = load_processed_log()
+    files_to_process = []
+
     try:
-        results = service.files().list(
-            q=f"'{FOLDER_ID}' in parents and (mimeType='image/jpeg' or mimeType='image/png' or mimeType='image/webp')",
-            fields="files(id, name, createdTime)",
-            orderBy="createdTime"
-        ).execute()
-        files = results.get('files', [])
+        page_token = None
+        while True:
+            results = gdrive_service.files().list(
+                q=f"'{GDRIVE_FOLDER_ID}' in parents and (mimeType='image/jpeg' or mimeType='image/png' or mimeType='image/webp') and trashed=false",
+                fields="nextPageToken, files(id, name, createdTime)",
+                orderBy="createdTime", # Traiter les plus anciens en premier
+                pageSize=100, # Récupérer par lots
+                pageToken=page_token
+            ).execute()
+            
+            current_batch = results.get('files', [])
+            if not current_batch:
+                log_message("Aucun fichier image trouvé dans le dossier spécifié.")
+                break # Sortir si le dossier est vide dès le départ
+
+            for file_item in current_batch:
+                if file_item['id'] not in processed_file_ids:
+                    files_to_process.append(file_item)
+            
+            page_token = results.get('nextPageToken', None)
+            if page_token is None:
+                break # Fin de la liste des fichiers
+        
     except Exception as e:
-        print(f"Erreur lors de la récupération de la liste des fichiers Drive : {e}")
-        # Afficher la trace complète pour plus de détails en cas d'erreur
+        log_message(f"Erreur lors de la récupération de la liste des fichiers Drive : {e}")
         import traceback
         traceback.print_exc()
         return
 
-    if not files:
-        print("Aucune nouvelle image trouvée.")
+    if not files_to_process:
+        log_message("Aucune NOUVELLE image à traiter (toutes déjà dans processed_log ou dossier vide).")
         return
 
-    print(f"{len(files)} image(s) trouvée(s) à traiter.")
-    for file_item in files:
+    log_message(f"{len(files_to_process)} nouvelle(s) image(s) trouvée(s) à traiter.")
+    
+    for file_item in files_to_process:
         file_id = file_item['id']
         file_name = file_item['name']
-        print(f"  📥 Traitement de {file_name} (ID: {file_id})...")
+        log_message(f"  📥 Traitement de {file_name} (ID: {file_id})...")
 
+        image_bytes = None
         try:
-            request = service.files().get_media(fileId=file_id)
+            request = gdrive_service.files().get_media(fileId=file_id)
             fh = io.BytesIO()
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             while not done:
-                status, done = downloader.next_chunk()
+                status, done = downloader.next_chunk(num_retries=3) # Ajout de reintentions
             
             fh.seek(0)
-            nparr = np.frombuffer(fh.read(), np.uint8)
+            image_bytes = fh.getvalue()
+            nparr = np.frombuffer(image_bytes, np.uint8)
             img_cv2 = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if img_cv2 is None:
-                print(f"  ❌ Impossible de décoder l'image {file_name}. Suppression de Drive...")
-                service.files().delete(fileId=file_id).execute()
-                print(f"  Image {file_name} supprimée de Drive.")
+                log_message(f"  ❌ Impossible de décoder l'image {file_name}. Marquage comme traité.")
+                save_to_processed_log(file_id) # Marquer pour ne pas réessayer
+                if DELETE_PROCESSED_FILES:
+                    try:
+                        gdrive_service.files().delete(fileId=file_id).execute()
+                        log_message(f"  🗑️ Image corrompue/indécodable {file_name} supprimée de Drive.")
+                    except Exception as del_e:
+                        log_message(f"  ⚠️ Échec de la suppression de l'image corrompue {file_name}: {del_e}")
                 continue
 
-            if detect_human(img_cv2):
-                base, ext = os.path.splitext(file_name)
-                safe_file_name = "".join(c if c.isalnum() or c in ['.', '_', '-'] else '_' for c in base)
-                temp_image_path = f"/tmp/{safe_file_name}.jpg" # Utiliser /tmp, inscriptible dans Docker
-                
-                cv2.imwrite(temp_image_path, img_cv2)
-                print(f"  ✅ Humain détecté dans {file_name}. Envoi de l’image par mail.")
-                send_email_with_image(DEST_EMAIL, temp_image_path, file_name)
-                os.remove(temp_image_path) 
-            else:
-                print(f"  ❌ Aucun humain détecté dans {file_name}.")
+            detection_result = detect_human(img_cv2)
+
+            if detection_result is True: # Humain détecté
+                log_message(f"  ✅ Humain détecté dans {file_name}. Envoi de l’alerte email.")
+                send_email_alert(RECIPIENT_EMAIL, image_bytes, file_name)
+            elif detection_result is False: # Aucun humain détecté
+                log_message(f"  ❌ Aucun humain détecté dans {file_name}.")
+            else: # Erreur pendant la détection (detection_result is None)
+                log_message(f"  ⚠️ Erreur lors de la détection sur {file_name}. Non traité pour email.")
             
-            print(f"  🗑️ Suppression de {file_name} de Google Drive...")
-            service.files().delete(fileId=file_id).execute()
-            print(f"  Image {file_name} supprimée de Drive.")
-            processed_files_count +=1
+            save_to_processed_log(file_id) # Marquer comme traité (que ce soit avec ou sans humain, ou erreur de détection)
+
+            if DELETE_PROCESSED_FILES:
+                try:
+                    log_message(f"  🗑️ Tentative de suppression de {file_name} de Google Drive...")
+                    gdrive_service.files().delete(fileId=file_id).execute()
+                    log_message(f"  Image {file_name} supprimée de Drive avec succès.")
+                except Exception as del_e:
+                    log_message(f"  ⚠️ Échec de la suppression de {file_name} après traitement: {del_e}")
+                    import traceback
+                    traceback.print_exc() # Loguer l'erreur complète de suppression
 
         except Exception as e:
-            print(f"  Erreur lors du traitement du fichier {file_name} (ID: {file_id}): {e}")
+            log_message(f"  Erreur majeure lors du traitement du fichier {file_name} (ID: {file_id}): {e}")
             import traceback
             traceback.print_exc()
+            # Ne pas marquer comme traité pour qu'il soit réessayé, sauf si c'est une erreur de téléchargement persistante.
+            # Ou alors, avoir un compteur de tentatives dans processed_log. Pour l'instant, on le laisse pour un prochain essai.
+
+# === SCRIPT PRINCIPAL (pour Cron Job) ===
+def main():
+    log_message("--- Démarrage du script de surveillance Caméra FR (Mode Cron Job) ---")
     
-    if processed_files_count > 0:
-        print(f"{processed_files_count} image(s) traitée(s).")
+    if not all([EMAIL_SENDER, EMAIL_PASSWORD, RECIPIENT_EMAIL, GOOGLE_CREDENTIALS_BASE64, GDRIVE_FOLDER_ID]):
+        log_message("ERREUR CRITIQUE: Variables d'environnement manquantes. Vérifiez EMAIL_SENDER, APP_PASSWORD, RECIPIENT_EMAIL, GOOGLE_CREDENTIALS_BASE64, GDRIVE_FOLDER_ID.")
+        return
+
+    if not initialize_drive_api():
+        log_message("Échec de l'initialisation de l'API Google Drive. Arrêt.")
+        return
+    
+    if not load_yolo_model():
+        log_message("Échec du chargement du modèle YOLO. Arrêt.")
+        return
+
+    log_message(f"Dossier Drive surveillé ID: {GDRIVE_FOLDER_ID}")
+    log_message(f"Emails envoyés à: {RECIPIENT_EMAIL}")
+    log_message(f"Emails envoyés de: {EMAIL_SENDER}")
+    log_message(f"Suppression des fichiers après traitement: {DELETE_PROCESSED_FILES}")
+    log_message("----------------------------------------------------")
+    
+    try:
+        process_images_from_drive()
+    except Exception as e:
+        log_message(f"Une erreur majeure est survenue dans main() : {e}")
+        import traceback
+        traceback.print_exc()
+    
+    log_message("--- Fin du script de surveillance Caméra FR ---")
 
 if __name__ == "__main__":
-    if not SENDER_EMAIL or not APP_PASSWORD:
-        print("AVERTISSEMENT CRITIQUE: SENDER_EMAIL ou APP_PASSWORD ne sont pas définis. L'envoi d'email ne fonctionnera pas.")
-    
-    CHECK_INTERVAL_SECONDS = 90
-    print("--- Démarrage du script de surveillance Caméra FR ---")
-    print(f"Vérification toutes les {CHECK_INTERVAL_SECONDS / 60} minutes.")
-    print(f"Dossier Drive surveillé ID: {FOLDER_ID}")
-    print(f"Emails envoyés à: {DEST_EMAIL}")
-    print(f"Emails envoyés de: {SENDER_EMAIL}")
-    print("----------------------------------------------------")
-    
-    while True:
-        try:
-            process_images()
-        except Exception as e:
-            print(f"Une erreur majeure est survenue dans la boucle principale : {e}")
-            import traceback
-            traceback.print_exc()
-            print("Reprise après une courte pause...")
-        
-        current_time_plus_interval = time.time() + CHECK_INTERVAL_SECONDS
-        print(f"Prochaine vérification dans {CHECK_INTERVAL_SECONDS / 60:.1f} minutes (vers {time.strftime('%H:%M:%S', time.localtime(current_time_plus_interval))}).")
-        time.sleep(CHECK_INTERVAL_SECONDS)
+    main()

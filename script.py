@@ -125,13 +125,19 @@ def process_emails():
     try:
         mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
         mail.socket().settimeout(IMAP_TIMEOUT)
+        log_message("Tentative de connexion à imap.gmail.com...")
         mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
+        log_message("Connexion IMAP réussie. Sélection de la boîte inbox...")
         mail.select("inbox")
-        status, data = mail.search(None, "ALL")
+        # Limiter aux e-mails des dernières 24 heures
+        since_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%d-%b-%Y")
+        status, data = mail.search(None, f'SINCE "{since_date}"')
         email_ids = data[0].split()
+        log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
         if not email_ids:
             log_message("  Aucun email trouvé dans la boîte.")
         for email_id in email_ids:
+            log_message(f"Fetching email ID: {email_id.decode()}")
             status, msg_data = mail.fetch(email_id, "(RFC822)")
             raw_email = msg_data[0][1]
             msg = email.message_from_bytes(raw_email)
@@ -143,11 +149,11 @@ def process_emails():
                             charset = part.get_content_charset('utf-8')
                             body = part.get_payload(decode=True).decode(charset, errors='replace')
                             if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body:
-                                log_message(f"  📧 Email {email_id} contient un mot-clé dans le corps.")
+                                log_message(f"  📧 Email {email_id.decode()} contient un mot-clé dans le corps.")
                                 body_found = True
                                 break
                         except (UnicodeDecodeError, AttributeError) as e:
-                            log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id}: {e}. Passage à l'attachement.")
+                            log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
                             continue
                 if body_found:
                     for attachment_part in msg.walk():
@@ -156,7 +162,7 @@ def process_emails():
                         if attachment_part.get('Content-Disposition') and 'attachment' in attachment_part.get('Content-Disposition'):
                             filename = attachment_part.get_filename()
                             if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
-                                log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id}...")
+                                log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id.decode()}...")
                                 image_data = attachment_part.get_payload(decode=True)
                                 img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
                                 detection_result = detect_human(img_cv2)
@@ -169,7 +175,9 @@ def process_emails():
                                 else:
                                     log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Non traité.")
         mail.expunge()
+        log_message("Expunge terminé.")
         mail.logout()
+        log_message("Déconnexion IMAP réussie.")
         log_message("Analyse des emails terminée.")
     except (imaplib.IMAP4.error, socket.timeout) as e:
         log_message(f"  Erreur lors de la connexion ou du traitement des emails : {e}")
@@ -190,7 +198,10 @@ def run_health_check_server():
     server_address = ('', 8000)
     httpd = HTTPServer(server_address, HealthCheckHandler)
     log_message("Démarrage du serveur de health check sur le port 8000...")
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    except Exception as e:
+        log_message(f"Erreur dans le serveur de health check : {e}")
 
 # === SCRIPT PRINCIPAL (pour boucle infinie) ===
 def main():
@@ -219,6 +230,7 @@ def main():
     # Démarrer le serveur de health check dans un thread séparé
     health_check_thread = threading.Thread(target=run_health_check_server, daemon=True)
     health_check_thread.start()
+    log_message("Serveur de health check démarré. Début de la boucle principale...")
 
     while True:
         try:

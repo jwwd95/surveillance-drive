@@ -14,11 +14,11 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # === CONFIGURATION via Variables d'Environnement ===
-RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
-EMAIL_SENDER = os.environ.get("SENDER_EMAIL", "said9560@gmail.com")
-EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")
-EMAIL_USER = os.environ.get("EMAIL_USER", "said9560@gmail.com")
-EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")
+RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com").lower()  # Normalisation de la casse
+EMAIL_SENDER = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")
+EMAIL_PASSWORD = os.environ.get("APP_PASSWORD", "ajut jinq dwkp pywj")  # Valeur par défaut ajoutée
+EMAIL_USER = os.environ.get("EMAIL_USER", "jalfatimi@gmail.com")
+EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "dszo cfzd bobi eivx")  # Valeur par défaut ajoutée
 
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
@@ -184,11 +184,11 @@ def process_emails():
 
     try:
         since_date = (datetime.datetime.now() - datetime.timedelta(hours=6)).strftime("%d-%b-%Y")
-        status, data = mail.search(None, f'SINCE "{since_date}"')
+        status, data = mail.search(None, f'SINCE "{since_date}" UNSEEN')
         email_ids = data[0].split()[:10]  # Limiter à 10 e-mails
-        log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
+        log_message(f"Nombre d'emails non lus trouvés (depuis {since_date}) : {len(email_ids)}")
         if not email_ids:
-            log_message("  Aucun email trouvé dans la boîte.")
+            log_message("  Aucun email non lu trouvé dans la boîte.")
         
         for email_id in email_ids:
             try:
@@ -312,13 +312,13 @@ def main():
         try:
             log_message("--- Début d'une nouvelle exécution ---")
             process_emails()
-            log_message("--- Fin de l'exécution, attente de 5 minutes ---")
-            time.sleep(300)
+            log_message("--- Fin de l'exécution, attente de 30 secondes ---")
+            time.sleep(30)  # Boucle réactive toutes les 30 secondes
         except Exception as e:
             log_message(f"Une erreur majeure est survenue dans main() : {e}")
             import traceback
             traceback.print_exc()
-            time.sleep(300)
+            time.sleep(30)
 
 if __name__ == "__main__":
     main()

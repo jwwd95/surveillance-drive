@@ -14,16 +14,16 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # === CONFIGURATION via Variables d'Environnement ===
-RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL")
-EMAIL_SENDER = os.environ.get("SENDER_EMAIL")
+RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
+EMAIL_SENDER = os.environ.get("SENDER_EMAIL", "said9560@gmail.com")
 EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")
-EMAIL_USER = os.environ.get("EMAIL_USER", "jalfatimi@gmail.com")
+EMAIL_USER = os.environ.get("EMAIL_USER", "said9560@gmail.com")
 EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")
 
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
 SMTP_PORT = 993
-IMAP_TIMEOUT = 120  # Timeout augmenté à 120 secondes
+IMAP_TIMEOUT = 120
 
 # Fichiers YOLO
 YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
@@ -70,21 +70,18 @@ def load_yolo_model():
 
 # === FONCTIONS DE TRAITEMENT ===
 def preprocess_image(image_cv2):
-    """Prétraite l'image pour améliorer la détection YOLO."""
     if image_cv2 is None:
         return None
     try:
-        # Ajustement du contraste
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        if len(image_cv2.shape) == 3:  # Image couleur
+        if len(image_cv2.shape) == 3:
             lab = cv2.cvtColor(image_cv2, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             l = clahe.apply(l)
             lab = cv2.merge((l, a, b))
             image_cv2 = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-        else:  # Image en niveaux de gris
+        else:
             image_cv2 = clahe.apply(image_cv2)
-        # Normalisation
         image_cv2 = cv2.normalize(image_cv2, None, 0, 255, cv2.NORM_MINMAX)
         return image_cv2
     except Exception as e:
@@ -100,7 +97,6 @@ def detect_human(image_cv2, image_name_for_log):
         log_message(f"  Image vide reçue pour la détection ({image_name_for_log}, dimensions: {height}x{width}).")
         return None
     
-    # Prétraitement de l'image
     image_cv2 = preprocess_image(image_cv2)
     if image_cv2 is None:
         log_message(f"  Échec du prétraitement pour l'image ({image_name_for_log}).")
@@ -174,7 +170,7 @@ def connect_to_imap():
         except (imaplib.IMAP4.error, socket.timeout) as e:
             log_message(f"  Erreur lors de la connexion IMAP (essai {attempt + 1}): {e}")
             if attempt < max_retries - 1:
-                time.sleep(5)  # Attendre 5 secondes avant de réessayer
+                time.sleep(5)
             else:
                 log_message("  Échec de la connexion IMAP après toutes les tentatives.")
                 return None
@@ -187,7 +183,6 @@ def process_emails():
         return
 
     try:
-        # Limiter aux e-mails des dernières 6 heures
         since_date = (datetime.datetime.now() - datetime.timedelta(hours=6)).strftime("%d-%b-%Y")
         status, data = mail.search(None, f'SINCE "{since_date}"')
         email_ids = data[0].split()
@@ -214,7 +209,8 @@ def process_emails():
                             try:
                                 charset = part.get_content_charset('utf-8')
                                 body = part.get_payload(decode=True).decode(charset, errors='replace')
-                                if "Alarm event: Motion DetectStart" in body or "Alarm event: Human DetectEnd" in body or "Alarm event: Motion DetectEnd" in body:
+                                keywords = ["Alarm event: Motion DetectStart", "Alarm event: Human DetectEnd", "Alarm event: Motion DetectEnd"]
+                                if any(keyword in body for keyword in keywords):
                                     log_message(f"  📧 Email {email_id.decode()} contient un mot-clé dans le corps.")
                                     body_found = True
                                     break
@@ -222,17 +218,6 @@ def process_emails():
                                 log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
                                 continue
                     if body_found:
-                        # Vérifier si le mot-clé est "Motion DetectEnd" pour suppression immédiate
-                        if "Alarm event: Motion DetectEnd" in body:
-                            log_message(f"  📧 Email {email_id.decode()} contient 'Alarm event: Motion DetectEnd'. Suppression immédiate.")
-                            mail.store(email_id, '+FLAGS', '\\Deleted')
-                            try:
-                                mail.expunge()
-                                log_message(f"  Suppression confirmée pour l'email {email_id.decode()} (Motion DetectEnd).")
-                            except Exception as e:
-                                log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
-                            continue
-                        # Sinon, procéder à la détection d'humains
                         for attachment_part in msg.walk():
                             if attachment_part.get_content_maintype() == 'multipart':
                                 continue
@@ -244,32 +229,17 @@ def process_emails():
                                     img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
                                     detection_result = detect_human(img_cv2, filename)
                                     if detection_result is True:
-                                        log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
-                                        send_email_alert(EMAIL_USER, image_data, filename)
-                                    elif detection_result is False:
-                                        log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
-                                        mail.store(email_id, '+FLAGS', '\\Deleted')
-                                        try:
-                                            mail.expunge()
-                                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()}.")
-                                        except Exception as e:
-                                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
-                                    else:
-                                        log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Suppression de l'email.")
-                                        mail.store(email_id, '+FLAGS', '\\Deleted')
-                                        try:
-                                            mail.expunge()
-                                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()} (image non valide).")
-                                        except Exception as e:
-                                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
-                                        try:
-                                            with open(f"/tmp/invalid_{filename}", "wb") as f:
-                                                f.write(image_data)
-                                            log_message(f"  Image invalide {filename} sauvegardée dans /tmp pour analyse.")
-                                        except Exception as e:
-                                            log_message(f"  Erreur lors de la sauvegarde de l'image invalide {filename}: {e}")
-                # Ajouter un délai pour éviter de surcharger le serveur Gmail
-                time.sleep(1)  # Augmenté à 1 seconde
+                                        log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email à {RECIPIENT_EMAIL}.")
+                                        send_email_alert(RECIPIENT_EMAIL, image_data, filename)
+                                    log_message(f"  Suppression de l'email {email_id.decode()} après traitement.")
+                                    mail.store(email_id, '+FLAGS', '\\Deleted')
+                                    try:
+                                        mail.expunge()
+                                        log_message(f"  Suppression confirmée pour l'email {email_id.decode()}.")
+                                    except Exception as e:
+                                        log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                                    break
+                time.sleep(2)
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
                 log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")
                 log_message("  Tentative de reconnexion IMAP...")
@@ -325,7 +295,6 @@ def main():
         log_message("Veuillez vérifier leur configuration sur Koyeb.")
         return
 
-    # Démarrer le health check avant le chargement du modèle YOLO pour éviter un échec précoce
     health_check_thread = threading.Thread(target=run_health_check_server, daemon=True)
     health_check_thread.start()
     log_message("Serveur de health check démarré.")

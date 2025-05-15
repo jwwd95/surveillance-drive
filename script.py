@@ -15,10 +15,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # === CONFIGURATION via Variables d'Environnement ===
 RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com").lower()  # Normalisation de la casse
-EMAIL_SENDER = "said9560@gmail.com"  # Adresse pour envoyer les alertes (SMTP)
-EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")  # Récupéré depuis Koyeb, pas de valeur par défaut
-EMAIL_USER = "said9560@gmail.com"  # Adresse surveillée (IMAP)
-EMAIL_APP_PASSWORD = os.environ.get("APP_PASSWORD")  # Utilise la même variable pour IMAP
+EMAIL_SENDER = "said9560@gmail.com"  # Fixé à said9560@gmail.com (ignore SENDER_EMAIL de Koyeb)
+EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")  # Utilisé pour SMTP
+EMAIL_USER = "said9560@gmail.com"  # Fixé à said9560@gmail.com (ignore EMAIL_USER de Koyeb)
+EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")  # Utilisé pour IMAP
 
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
@@ -284,9 +284,8 @@ def run_health_check_server():
 def main():
     log_message("--- Initialisation du script de surveillance des emails ---")
     required_vars = {
-        "SENDER_EMAIL": EMAIL_SENDER,
-        "APP_PASSWORD": EMAIL_PASSWORD,
         "DEST_EMAIL": RECIPIENT_EMAIL,
+        "APP_PASSWORD": EMAIL_PASSWORD,
         "EMAIL_APP_PASSWORD": EMAIL_APP_PASSWORD
     }
     missing_vars = [name for name, value in required_vars.items() if not value]

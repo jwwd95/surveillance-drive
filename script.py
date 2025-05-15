@@ -185,7 +185,7 @@ def process_emails():
     try:
         since_date = (datetime.datetime.now() - datetime.timedelta(hours=6)).strftime("%d-%b-%Y")
         status, data = mail.search(None, f'SINCE "{since_date}"')
-        email_ids = data[0].split()
+        email_ids = data[0].split()[:10]  # Limiter à 10 e-mails
         log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
         if not email_ids:
             log_message("  Aucun email trouvé dans la boîte.")

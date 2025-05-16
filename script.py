@@ -12,6 +12,8 @@ import email
 import socket
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from PIL import Image
+import io
 
 # === CONFIGURATION via Variables d'Environnement ===
 RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com").lower()  # Normalisation de la casse
@@ -232,10 +234,20 @@ def process_emails():
                                     if image_data is None or len(image_data) == 0:
                                         log_message(f"  Données d'image absentes ou vides pour {filename}.")
                                         continue
+                                    # Débogage : Vérifier les premiers octets pour identifier le format
+                                    log_message(f"  Premiers 10 octets de l'image {filename}: {image_data[:10].hex() if image_data else 'None'}")
+                                    # Tentative de décodage avec OpenCV
                                     img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
                                     if img_cv2 is None:
                                         log_message(f"  Échec du décodage de l'image {filename} avec OpenCV.")
-                                        continue
+                                        # Tentative de décodage avec Pillow comme secours
+                                        try:
+                                            pil_image = Image.open(io.BytesIO(image_data))
+                                            img_cv2 = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+                                            log_message(f"  Décodage de l'image {filename} réussi avec Pillow.")
+                                        except Exception as e:
+                                            log_message(f"  Échec du décodage de l'image {filename} avec Pillow : {e}")
+                                            continue
                                     detection_result = detect_human(img_cv2, filename)
                                     if detection_result is True:
                                         log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email à {RECIPIENT_EMAIL}.")

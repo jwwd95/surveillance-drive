@@ -15,8 +15,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # === CONFIGURATION via Variables d'Environnement ===
 RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com").lower()  # Normalisation de la casse
-EMAIL_ADDRESS = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")  # Utilise SENDER_EMAIL de Koyeb comme base
-EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")  # Utilise APP_PASSWORD de Koyeb
+EMAIL_ADDRESS = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")  # Utilise SENDER_EMAIL comme adresse principale
+EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")  # Utilise APP_PASSWORD comme mot de passe
 
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"

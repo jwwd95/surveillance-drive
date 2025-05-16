@@ -1,6 +1,3 @@
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib # Bien que nous utilisions service_account, il est bon de l'avoir si on retombe sur OAuth
-opencv-python-headless
-numpy
-# mimetypes, json, base64, datetime, io, os, smtplib, ssl, time sont standards
+opencv-python-headless>=4.5.0
+numpy>=1.21.0
+Pillow>=10.3.0

@@ -15,10 +15,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # === CONFIGURATION via Variables d'Environnement ===
 RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com").lower()  # Normalisation de la casse
-EMAIL_SENDER = "said9560@gmail.com"  # Fixé à said9560@gmail.com (ignore SENDER_EMAIL de Koyeb)
-EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")  # Utilisé pour SMTP
-EMAIL_USER = "said9560@gmail.com"  # Fixé à said9560@gmail.com (ignore EMAIL_USER de Koyeb)
-EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")  # Utilisé pour IMAP
+EMAIL_ADDRESS = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")  # Utilise SENDER_EMAIL de Koyeb comme base
+EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")  # Utilise APP_PASSWORD de Koyeb
 
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
@@ -119,12 +117,12 @@ def detect_human(image_cv2, image_name_for_log):
     return False
 
 def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email):
-    if not EMAIL_SENDER or not EMAIL_PASSWORD:
-        log_message("  AVERTISSEMENT: EMAIL_SENDER ou APP_PASSWORD non configurés. Impossible d'envoyer l'email.")
+    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
+        log_message("  AVERTISSEMENT: EMAIL_ADDRESS ou EMAIL_PASSWORD non configurés. Impossible d'envoyer l'email.")
         return
     msg = MIMEMultipart()
     msg['Subject'] = f'🛑 Humain détecté sur l’image: {image_name_for_email}'
-    msg['From'] = EMAIL_SENDER
+    msg['From'] = EMAIL_ADDRESS
     msg['To'] = recipient_email
     body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email).'
     msg.attach(MIMEText(body_text, 'plain'))
@@ -149,7 +147,7 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
             msg.attach(MIMEText(body_text, 'plain'))
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             smtp.send_message(msg)
         log_message(f"  Email envoyé avec succès à {recipient_email} pour l'image {image_name_for_email}")
     except Exception as e:
@@ -163,7 +161,7 @@ def connect_to_imap():
             mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
             mail.socket().settimeout(IMAP_TIMEOUT)
             log_message(f"Tentative de connexion à imap.gmail.com (essai {attempt + 1}/{max_retries})...")
-            mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
+            mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             log_message("Connexion IMAP réussie. Sélection de la boîte inbox...")
             mail.select("inbox")
             return mail
@@ -285,8 +283,8 @@ def main():
     log_message("--- Initialisation du script de surveillance des emails ---")
     required_vars = {
         "DEST_EMAIL": RECIPIENT_EMAIL,
-        "APP_PASSWORD": EMAIL_PASSWORD,
-        "EMAIL_APP_PASSWORD": EMAIL_APP_PASSWORD
+        "SENDER_EMAIL": EMAIL_ADDRESS,
+        "APP_PASSWORD": EMAIL_PASSWORD
     }
     missing_vars = [name for name, value in required_vars.items() if not value]
     if missing_vars:
@@ -301,9 +299,9 @@ def main():
     if not load_yolo_model():
         log_message("Échec du chargement du modèle YOLO. Le script continuera mais la détection YOLO sera désactivée.")
 
-    log_message(f"Emails analysés sur: {EMAIL_USER}")
+    log_message(f"Emails analysés sur: {EMAIL_ADDRESS}")
     log_message(f"Emails envoyés à: {RECIPIENT_EMAIL}")
-    log_message(f"Emails envoyés de: {EMAIL_SENDER}")
+    log_message(f"Emails envoyés de: {EMAIL_ADDRESS}")
     log_message("----------------------------------------------------")
 
     log_message("Début de la boucle principale...")

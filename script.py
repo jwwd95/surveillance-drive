@@ -197,8 +197,12 @@ def process_emails():
                     continue
                 raw_email = msg_data[0][1]
                 if not isinstance(raw_email, bytes):
-                    log_message(f"  Données invalides pour l'email {email_id.decode()} : type {type(raw_email)}, valeur {raw_email}")
-                    continue
+                    try:
+                        raw_email = str(raw_email).encode('utf-8')
+                        log_message(f"  Conversion de {type(raw_email)} en bytes pour l'email {email_id.decode()}.")
+                    except Exception as e:
+                        log_message(f"  Échec de la conversion des données pour l'email {email_id.decode()}: {e}")
+                        continue
                 msg = email.message_from_bytes(raw_email)
                 if msg.is_multipart():
                     body_found = False
@@ -224,7 +228,14 @@ def process_emails():
                                 if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
                                     log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id.decode()}...")
                                     image_data = attachment_part.get_payload(decode=True)
+                                    log_message(f"  Taille des données de l'image {filename}: {len(image_data) if image_data else 'None'} octets")
+                                    if image_data is None or len(image_data) == 0:
+                                        log_message(f"  Données d'image absentes ou vides pour {filename}.")
+                                        continue
                                     img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
+                                    if img_cv2 is None:
+                                        log_message(f"  Échec du décodage de l'image {filename} avec OpenCV.")
+                                        continue
                                     detection_result = detect_human(img_cv2, filename)
                                     if detection_result is True:
                                         log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email à {RECIPIENT_EMAIL}.")

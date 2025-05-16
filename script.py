@@ -16,6 +16,7 @@ from PIL import Image
 import io
 
 # === CONFIGURATION via Variables d'Environnement ===
+CHECK_ALL_EMAILS = os.environ.get("CHECK_ALL_EMAILS", "false").lower() == "true"  # Par défaut, uniquement non lus
 RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com").lower()  # Normalisation de la casse
 EMAIL_ADDRESS = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")  # Utilise SENDER_EMAIL comme adresse principale
 EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")  # Utilise APP_PASSWORD comme mot de passe
@@ -184,11 +185,17 @@ def process_emails():
 
     try:
         since_date = (datetime.datetime.now() - datetime.timedelta(hours=6)).strftime("%d-%b-%Y")
-        status, data = mail.search(None, f'SINCE "{since_date}" UNSEEN')
+        search_criteria = f'SINCE "{since_date}"'
+        if CHECK_ALL_EMAILS:
+            log_message("Mode CHECK_ALL_EMAILS activé : analyse de tous les emails (lus et non lus).")
+        else:
+            search_criteria += " UNSEEN"
+            log_message("Mode par défaut : analyse uniquement des emails non lus.")
+        status, data = mail.search(None, search_criteria)
         email_ids = data[0].split()[:10]  # Limiter à 10 e-mails
-        log_message(f"Nombre d'emails non lus trouvés (depuis {since_date}) : {len(email_ids)}")
+        log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
         if not email_ids:
-            log_message("  Aucun email non lu trouvé dans la boîte.")
+            log_message("  Aucun email trouvé dans la boîte.")
         
         for email_id in email_ids:
             try:

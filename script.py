@@ -12,7 +12,7 @@ import email
 import socket
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import pytz  # Ajout de pytz pour gérer les fuseaux horaires
+import pytz  # Dépendance à installer via requirements.txt
 
 # === CONFIGURATION via Variables d'Environnement ===
 APP_PASSWORD = os.environ.get("APP_PASSWORD")

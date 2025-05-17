@@ -60,8 +60,8 @@ def load_yolo_model():
             yolo_output_layers = [layer_names[i - 1] for i in unconnected_out_layers]
         with open(COCO_NAMES_FILE, 'r') as f:
             yolo_classes = [line.strip() for line in f.readlines()]
-        if 'person' not in yolo_classes:
-            log_message("ERREUR CRITIQUE: La classe 'person' n'est pas trouvée dans coco.names.")
+        if 'person' not in yolo_classes or 'cat' not in yolo_classes:
+            log_message("ERREUR CRITIQUE: Les classes 'person' ou 'cat' ne sont pas trouvées dans coco.names.")
             return False
         log_message("Modèle YOLO chargé avec succès.")
         return True
@@ -91,19 +91,19 @@ def preprocess_image(image_cv2):
         log_message(f"  Erreur lors du prétraitement de l'image : {e}")
         return None
 
-def detect_human(image_cv2, image_name_for_log):
+def detect_human_or_animal(image_cv2, image_name_for_log):
     if image_cv2 is None:
         log_message(f"  Image non valide reçue pour la détection ({image_name_for_log}).")
-        return None
+        return None, None
     height, width = image_cv2.shape[:2]
     if height == 0 or width == 0:
         log_message(f"  Image vide reçue pour la détection ({image_name_for_log}, dimensions: {height}x{width}).")
-        return None
+        return None, None
     
     image_cv2 = preprocess_image(image_cv2)
     if image_cv2 is None:
         log_message(f"  Échec du prétraitement pour l'image ({image_name_for_log}).")
-        return None
+        return None, None
 
     blob = cv2.dnn.blobFromImage(image_cv2, 1/255.0, (416, 416), swapRB=True, crop=False)
     yolo_net.setInput(blob)
@@ -112,33 +112,34 @@ def detect_human(image_cv2, image_name_for_log):
         log_message(f"  Détection YOLO terminée pour {image_name_for_log}, nombre de détections : {sum(len(output) for output in outputs)}")
     except Exception as e:
         log_message(f"  Erreur pendant la propagation avant (forward pass) YOLO pour {image_name_for_log}: {e}")
-        return None
+        return None, None
     
+    detected_class = None
     for output in outputs:
         for detection in output:
             scores = detection[5:]
             class_id_index = np.argmax(scores)
             confidence = scores[class_id_index]
-            if (class_id_index < len(yolo_classes) and 
-                yolo_classes[class_id_index] == 'person' and 
-                confidence > 0.25):
-                log_message(f"  Détection : Humain trouvé dans {image_name_for_log} avec confiance {confidence:.2f}")
-                return True
-    log_message(f"  Aucun humain détecté dans {image_name_for_log}")
-    return False
+            if class_id_index < len(yolo_classes) and confidence > 0.25:
+                class_name = yolo_classes[class_id_index]
+                if class_name in ["person", "cat"]:
+                    log_message(f"  Détection : {class_name} trouvé dans {image_name_for_log} avec confiance {confidence:.2f}")
+                    detected_class = class_name
+                    return detected_class, confidence
+    log_message(f"  Aucun humain ou chat détecté dans {image_name_for_log}")
+    return None, None
 
-def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email, detection_time):
+def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email, detection_time, detected_class=None):
     if not SENDER_EMAIL or not APP_PASSWORD:
         log_message("  AVERTISSEMENT: SENDER_EMAIL ou APP_PASSWORD non configurés. Impossible d'envoyer l'email.")
         return
     msg = MIMEMultipart()
-    # Convertir l'heure UTC en heure de France (CEST en mai)
     detection_time_france = detection_time.astimezone(FRANCE_TZ)
-    subject = f"Humain présent à {detection_time_france.strftime('%H:%M')}"
+    subject = f"{detected_class.capitalize() if detected_class else 'Objet'} présent à {detection_time_france.strftime('%H:%M')}"
     msg['Subject'] = subject
     msg['From'] = SENDER_EMAIL
     msg['To'] = recipient_email
-    body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email) à {detection_time_france.strftime("%H:%M")} (heure de France).'
+    body_text = f'Un {detected_class if detected_class else "objet"} a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email) à {detection_time_france.strftime("%H:%M")} (heure de France).'
     msg.attach(MIMEText(body_text, 'plain'))
     
     if image_bytes_for_attachment:
@@ -282,14 +283,12 @@ def process_emails():
                                     except Exception as e:
                                         log_message(f"  ⚠️ Image {filename} tronquée ou invalide : {e}")
                                         continue
-                                    detection_result = detect_human(img_cv2, filename)
-                                    if detection_result is True:
-                                        log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
-                                        send_email_alert(DEST_EMAIL, image_data, filename, detection_time)
-                                    elif detection_result is False:
-                                        log_message(f"  ❌ Aucun humain détecté dans {filename}.")
+                                    detected_class, confidence = detect_human_or_animal(img_cv2, filename)
+                                    if detected_class:
+                                        log_message(f"  ✅ {detected_class.capitalize()} détecté dans {filename} avec confiance {confidence:.2f}. Envoi de l’alerte email.")
+                                        send_email_alert(DEST_EMAIL, image_data, filename, detection_time, detected_class)
                                     else:
-                                        log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}.")
+                                        log_message(f"  ❌ Aucun humain ou chat détecté dans {filename}.")
                         mail.store(email_id, '+FLAGS', '\\Deleted')
                         try:
                             mail.expunge()

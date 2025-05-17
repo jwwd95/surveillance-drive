@@ -22,7 +22,7 @@ SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
 SMTP_PORT = 993
-IMAP_TIMEOUT = 120  # Timeout augmenté à 120 secondes
+IMAP_TIMEOUT = 120
 
 # Fichiers YOLO
 YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
@@ -69,21 +69,18 @@ def load_yolo_model():
 
 # === FONCTIONS DE TRAITEMENT ===
 def preprocess_image(image_cv2):
-    """Prétraite l'image pour améliorer la détection YOLO."""
     if image_cv2 is None:
         return None
     try:
-        # Ajustement du contraste
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        if len(image_cv2.shape) == 3:  # Image couleur
+        if len(image_cv2.shape) == 3:
             lab = cv2.cvtColor(image_cv2, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             l = clahe.apply(l)
             lab = cv2.merge((l, a, b))
             image_cv2 = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-        else:  # Image en niveaux de gris
+        else:
             image_cv2 = clahe.apply(image_cv2)
-        # Normalisation
         image_cv2 = cv2.normalize(image_cv2, None, 0, 255, cv2.NORM_MINMAX)
         return image_cv2
     except Exception as e:
@@ -99,7 +96,6 @@ def detect_human(image_cv2, image_name_for_log):
         log_message(f"  Image vide reçue pour la détection ({image_name_for_log}, dimensions: {height}x{width}).")
         return None
     
-    # Prétraitement de l'image
     image_cv2 = preprocess_image(image_cv2)
     if image_cv2 is None:
         log_message(f"  Échec du prétraitement pour l'image ({image_name_for_log}).")
@@ -121,7 +117,7 @@ def detect_human(image_cv2, image_name_for_log):
             confidence = scores[class_id_index]
             if (class_id_index < len(yolo_classes) and 
                 yolo_classes[class_id_index] == 'person' and 
-                confidence > 0.1):
+                confidence > 0.25):
                 log_message(f"  Détection : Humain trouvé dans {image_name_for_log} avec confiance {confidence:.2f}")
                 return True
     log_message(f"  Aucun humain détecté dans {image_name_for_log}")
@@ -191,8 +187,8 @@ def process_emails():
         return
 
     try:
-        since_date = (datetime.datetime.now() - datetime.timedelta(hours=2)).strftime("%d-%b-%Y")
-        status, data = mail.search(None, f'SINCE "{since_date}"')
+        since_date = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime("%d-%b-%Y")
+        status, data = mail.search(None, f'SINCE "{since_date}"')  # Analyse tous les emails depuis 1 heure, lus ou non lus
         email_ids = data[0].split()
         log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
         if not email_ids:
@@ -200,6 +196,7 @@ def process_emails():
         
         for email_id in email_ids:
             try:
+                mail.noop()
                 log_message(f"Fetching email ID: {email_id.decode()}")
                 status, msg_data = mail.fetch(email_id, "(RFC822)")
                 if status != 'OK' or not msg_data or len(msg_data) < 2 or msg_data[0] is None:
@@ -220,7 +217,7 @@ def process_emails():
                                 if ("Alarm event: Motion DetectStart" in body or 
                                     "Alarm event: Human DetectEnd" in body or 
                                     "Alarm event: Motion DetectEnd" in body or 
-                                    "Alarm event: Human DetectStart" in body):  # Ajout de Human DetectStart
+                                    "Alarm event: Human DetectStart" in body):
                                     log_message(f"  📧 Email {email_id.decode()} contient un mot-clé dans le corps.")
                                     body_found = True
                                     break
@@ -228,19 +225,21 @@ def process_emails():
                                 log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
                                 continue
                     if body_found:
-                        if "Alarm event: Motion DetectEnd" in body:
-                            log_message(f"  📧 Email {email_id.decode()} contient 'Alarm event: Motion DetectEnd'. Suppression immédiate.")
+                        if "DetectEnd" in body:  # Suppression immédiate pour tous les emails avec "DetectEnd"
+                            log_message(f"  📧 Email {email_id.decode()} contient 'DetectEnd'. Suppression immédiate.")
                             mail.store(email_id, '+FLAGS', '\\Deleted')
                             try:
                                 mail.expunge()
-                                log_message(f"  Suppression confirmée pour l'email {email_id.decode()} (Motion DetectEnd).")
+                                log_message(f"  Suppression confirmée pour l'email {email_id.decode()} (DetectEnd).")
                             except Exception as e:
                                 log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
                             continue
+                        has_attachment = False
                         for attachment_part in msg.walk():
                             if attachment_part.get_content_maintype() == 'multipart':
                                 continue
                             if attachment_part.get('Content-Disposition') and 'attachment' in attachment_part.get('Content-Disposition'):
+                                has_attachment = True
                                 filename = attachment_part.get_filename()
                                 if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
                                     log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id.decode()}...")
@@ -260,28 +259,17 @@ def process_emails():
                                         log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
                                         send_email_alert(DEST_EMAIL, image_data, filename)
                                     elif detection_result is False:
-                                        log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
-                                        mail.store(email_id, '+FLAGS', '\\Deleted')
-                                        try:
-                                            mail.expunge()
-                                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()}.")
-                                        except Exception as e:
-                                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                                        log_message(f"  ❌ Aucun humain détecté dans {filename}.")
                                     else:
-                                        log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}. Suppression de l'email.")
-                                        mail.store(email_id, '+FLAGS', '\\Deleted')
-                                        try:
-                                            mail.expunge()
-                                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()} (image non valide).")
-                                        except Exception as e:
-                                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
-                                        try:
-                                            with open(f"/tmp/invalid_{filename}", "wb") as f:
-                                                f.write(image_data)
-                                            log_message(f"  Image invalide {filename} sauvegardée dans /tmp pour analyse.")
-                                        except Exception as e:
-                                            log_message(f"  Erreur lors de la sauvegarde de l'image invalide {filename}: {e}")
-                time.sleep(2)
+                                        log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}.")
+                        if has_attachment:  # Suppression après traitement si un attachment a été traité
+                            mail.store(email_id, '+FLAGS', '\\Deleted')
+                            try:
+                                mail.expunge()
+                                log_message(f"  Suppression confirmée pour l'email {email_id.decode()} après traitement.")
+                            except Exception as e:
+                                log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                time.sleep(3)
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
                 log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")
                 log_message("  Tentative de reconnexion IMAP...")
@@ -322,7 +310,7 @@ def run_health_check_server():
     except Exception as e:
         log_message(f"Erreur dans le serveur de health check : {e}")
 
-# === SCRIPT PRINCIPAL (pour boucle infinie) ===
+# === SCRIPT PRINCIPAL ===
 def main():
     log_message("--- Initialisation du script de surveillance des emails ---")
     required_vars = {

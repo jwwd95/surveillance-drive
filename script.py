@@ -368,13 +368,13 @@ def main():
         try:
             log_message("--- Début d'une nouvelle exécution ---")
             process_emails()
-            log_message("--- Fin de l'exécution, attente de 5 minutes ---")
-            time.sleep(300)
+            log_message("--- Fin de l'exécution, attente de 10 secondes ---")
+            time.sleep(10)  # Réduction à 10 secondes pour une réactivité accrue
         except Exception as e:
             log_message(f"Une erreur majeure est survenue dans main() : {e}")
             import traceback
             traceback.print_exc()
-            time.sleep(300)
+            time.sleep(10)  # Continue même en cas d'erreur avec un délai de 10 secondes
 
 if __name__ == "__main__":
     main()

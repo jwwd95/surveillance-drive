@@ -60,7 +60,7 @@ def load_yolo_model():
         if 'person' not in yolo_classes:
             log_message("ERREUR CRITIQUE: La classe 'person' n'est pas trouvée dans coco.names.")
             return False
-        log_message("Modèle YOLO chargé avec succès.")
+        log_message("Modèle YOLO chargé avec succès. Classes disponibles: " + ", ".join(yolo_classes))
         return True
     except Exception as e:
         log_message(f"ERREUR CRITIQUE: Erreur lors du chargement du modèle YOLO : {e}")
@@ -69,10 +69,25 @@ def load_yolo_model():
         return False
 
 # === FONCTIONS DE TRAITEMENT ===
-def preprocess_image(image_cv2):
+def preprocess_image(image_cv2, filename):
     if image_cv2 is None:
+        log_message(f"  Échec du prétraitement pour {filename}: Image non valide ou non décodée.")
         return None
     try:
+        # Vérification initiale des dimensions
+        height, width = image_cv2.shape[:2]
+        log_message(f"  Prétraitement de {filename}: Dimensions initiales {height}x{width}, type {image_cv2.dtype}, canaux {image_cv2.shape[-1] if len(image_cv2.shape) == 3 else 1}")
+        
+        # Redimensionnement
+        target_size = (416, 416)
+        image_cv2 = cv2.resize(image_cv2, target_size, interpolation=cv2.INTER_AREA)
+        log_message(f"  Prétraitement: {filename} redimensionnée à {target_size}, nouvelle taille {image_cv2.shape}")
+
+        # Réduction de bruit
+        image_cv2 = cv2.GaussianBlur(image_cv2, (5, 5), 0)
+        log_message(f"  Prétraitement: Réduction de bruit appliquée à {filename} avec flou gaussien (5x5)")
+
+        # Amélioration du contraste
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         if len(image_cv2.shape) == 3:
             lab = cv2.cvtColor(image_cv2, cv2.COLOR_BGR2LAB)
@@ -82,43 +97,46 @@ def preprocess_image(image_cv2):
             image_cv2 = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
         else:
             image_cv2 = clahe.apply(image_cv2)
+        log_message(f"  Prétraitement: Contraste amélioré pour {filename} avec CLAHE")
+
+        # Normalisation
         image_cv2 = cv2.normalize(image_cv2, None, 0, 255, cv2.NORM_MINMAX)
+        log_message(f"  Prétraitement: Normalisation appliquée à {filename}, valeurs min/max: {image_cv2.min()}/{image_cv2.max()}")
+        
         return image_cv2
     except Exception as e:
-        log_message(f"  Erreur lors du prétraitement de l'image : {e}")
+        log_message(f"  ERREUR PRÉTRAITEMENT: {filename} a échoué - {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def detect_human(image_cv2, image_name_for_log):
     if image_cv2 is None:
-        log_message(f"  Image non valide ou non décodée pour la détection ({image_name_for_log}).")
-        return False
-    height, width = image_cv2.shape[:2]
-    if height == 0 or width == 0:
-        log_message(f"  Image vide reçue pour la détection ({image_name_for_log}, dimensions: {height}x{width}).")
-        return False
+        log_message(f"  DÉTECTION: {image_name_for_log} non valide après prétraitement, abandon.")
+        return None
     
-    image_cv2 = preprocess_image(image_cv2)
-    if image_cv2 is None:
-        log_message(f"  Échec du prétraitement pour l'image ({image_name_for_log}).")
-        return False
-
+    log_message(f"  DÉTECTION: Lancement de la détection sur {image_name_for_log}, taille {image_cv2.shape}, type {image_cv2.dtype}")
     blob = cv2.dnn.blobFromImage(image_cv2, 1/255.0, (416, 416), swapRB=True, crop=False)
     yolo_net.setInput(blob)
     try:
         outputs = yolo_net.forward(yolo_output_layers)
-    except Exception as e:
-        log_message(f"  Erreur pendant la propagation avant (forward pass) YOLO pour {image_name_for_log}: {e}")
+        log_message(f"  DÉTECTION: Propagation avant YOLO terminée pour {image_name_for_log}, nombre de détections: {len(outputs[0])}")
+        for output in outputs:
+            for detection in output:
+                scores = detection[5:]
+                class_id_index = np.argmax(scores)
+                confidence = scores[class_id_index]
+                log_message(f"  DÉTECTION: Analyse détection - classe {class_id_index}, confiance {confidence:.2f}")
+                if class_id_index < len(yolo_classes) and yolo_classes[class_id_index] == 'person' and confidence > 0.3:
+                    log_message(f"  ✅ DÉTECTION: Humain détecté dans {image_name_for_log} avec confiance {confidence:.2f}.")
+                    return True
+        log_message(f"  ⛔ DÉTECTION: Aucun humain détecté dans {image_name_for_log}.")
         return False
-    for output in outputs:
-        for detection in output:
-            scores = detection[5:]
-            class_id_index = np.argmax(scores)
-            confidence = scores[class_id_index]
-            if class_id_index < len(yolo_classes) and yolo_classes[class_id_index] == 'person' and confidence > 0.3:
-                log_message(f"  ✅ Humain détecté dans {image_name_for_log} avec confiance {confidence:.2f}.")
-                return True
-    log_message(f"  ⛔ Aucun humain détecté dans {image_name_for_log}.")
-    return False
+    except Exception as e:
+        log_message(f"  ERREUR DÉTECTION: {image_name_for_log} a échoué - {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email):
     if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
@@ -133,29 +151,29 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
     
     if image_bytes_for_attachment:
         try:
-            log_message(f"  Taille des données de l'image {image_name_for_email}: {len(image_bytes_for_attachment)} octets")
+            log_message(f"  ENVOI EMAIL: Taille des données de {image_name_for_email}: {len(image_bytes_for_attachment)} octets")
             if image_name_for_email.lower().endswith(('.jpg', '.jpeg')):
                 subtype = 'jpeg'
             elif image_name_for_email.lower().endswith('.png'):
                 subtype = 'png'
             else:
                 subtype = 'jpeg'
-            log_message(f"  Sous-type MIME déterminé pour {image_name_for_email}: {subtype}")
+            log_message(f"  ENVOI EMAIL: Sous-type MIME pour {image_name_for_email}: {subtype}")
             img_mime = MIMEImage(image_bytes_for_attachment, _subtype=subtype)
             img_mime.add_header('Content-Disposition', 'attachment', filename=os.path.basename(image_name_for_email))
             msg.attach(img_mime)
-            log_message(f"  Image {image_name_for_email} attachée avec succès à l'e-mail.")
+            log_message(f"  ENVOI EMAIL: Image {image_name_for_email} attachée avec succès.")
         except Exception as e:
-            log_message(f"  Erreur lors de l'attachement de l'image {image_name_for_email}: {e}")
+            log_message(f"  ERREUR ENVOI EMAIL: Attachement de {image_name_for_email} a échoué - {e}")
             body_text += f"\n(Erreur lors de l'attachement de l'image : {str(e)})"
             msg.attach(MIMEText(body_text, 'plain'))
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
             smtp.send_message(msg)
-        log_message(f"  Email envoyé avec succès à {recipient_email} pour l'image {image_name_for_email}")
+        log_message(f"  ENVOI EMAIL: Email envoyé avec succès à {recipient_email} pour {image_name_for_email}")
     except Exception as e:
-        log_message(f"  Erreur lors de l'envoi de l'email : {e}")
+        log_message(f"  ERREUR ENVOI EMAIL: Échec de l'envoi à {recipient_email} pour {image_name_for_email} - {e}")
 
 # === SURVEILLANCE DES EMAILS ===
 def connect_to_imap():
@@ -164,50 +182,52 @@ def connect_to_imap():
         try:
             mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
             mail.socket().settimeout(IMAP_TIMEOUT)
-            log_message(f"Tentative de connexion à imap.gmail.com (essai {attempt + 1}/{max_retries})...")
+            log_message(f"IMAP: Tentative de connexion (essai {attempt + 1}/{max_retries})...")
             mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-            log_message("Connexion IMAP réussie. Sélection de la boîte inbox...")
+            log_message("IMAP: Connexion réussie. Sélection de la boîte inbox...")
             mail.select("inbox")
             return mail
         except (imaplib.IMAP4.error, socket.timeout) as e:
-            log_message(f"  Erreur lors de la connexion IMAP (essai {attempt + 1}): {e}")
+            log_message(f"IMAP: Échec de la connexion (essai {attempt + 1}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(5)
             else:
-                log_message("  Échec de la connexion IMAP après toutes les tentatives.")
+                log_message("IMAP: Échec de la connexion après toutes les tentatives.")
                 return None
 
 def process_emails():
-    log_message("Connexion à la boîte mail pour analyse...")
+    log_message("IMAP: Connexion à la boîte mail pour analyse...")
     mail = connect_to_imap()
     if not mail:
-        log_message("  Échec de la connexion IMAP. Abandon.")
+        log_message("IMAP: Échec de la connexion IMAP. Abandon.")
         return
 
     try:
         since_date = (datetime.datetime.now() - datetime.timedelta(hours=6)).strftime("%d-%b-%Y")
         search_criteria = f'SINCE "{since_date}"'
-        log_message("Analyse de tous les emails (lus et non lus).")
+        log_message(f"IMAP: Recherche des emails depuis {since_date} (lus et non lus)...")
         status, data = mail.search(None, search_criteria)
         email_ids = data[0].split()[:10]  # Limiter à 10 e-mails
-        log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
+        log_message(f"IMAP: {len(email_ids)} emails trouvés.")
+        
         if not email_ids:
-            log_message("  Aucun email trouvé dans la boîte.")
+            log_message("IMAP: Aucun email trouvé dans la boîte.")
         
         for email_id in email_ids:
             try:
-                log_message(f"Fetching email ID: {email_id.decode()}")
+                log_message(f"IMAP: Récupération de l'email ID {email_id.decode()}...")
                 status, msg_data = mail.fetch(email_id, "(RFC822)")
                 if status != 'OK' or not msg_data or len(msg_data) < 2 or msg_data[0] is None:
-                    log_message(f"  Échec de la récupération de l'email {email_id.decode()}: statut {status} ou données invalides")
+                    log_message(f"IMAP: Échec de la récupération de {email_id.decode()}: statut {status}, données {msg_data}")
                     continue
                 raw_email = msg_data[0][1]
+                log_message(f"IMAP: Données brutes de {email_id.decode()} récupérées, taille {len(raw_email)} octets")
                 if not isinstance(raw_email, bytes):
                     try:
                         raw_email = str(raw_email).encode('utf-8')
-                        log_message(f"  Conversion de {type(raw_email)} en bytes pour l'email {email_id.decode()}.")
+                        log_message(f"IMAP: Conversion de {type(raw_email)} en bytes pour {email_id.decode()}.")
                     except Exception as e:
-                        log_message(f"  Échec de la conversion des données pour l'email {email_id.decode()}: {e}")
+                        log_message(f"IMAP: Échec de conversion pour {email_id.decode()} - {e}")
                         continue
                 msg = email.message_from_bytes(raw_email)
                 if msg.is_multipart():
@@ -219,11 +239,11 @@ def process_emails():
                                 body = part.get_payload(decode=True).decode(charset, errors='replace')
                                 keywords = ["Alarm event: Motion DetectStart", "Alarm event: Human DetectEnd", "Alarm event: Motion DetectEnd"]
                                 if any(keyword in body for keyword in keywords):
-                                    log_message(f"  📧 Email {email_id.decode()} contient un mot-clé dans le corps.")
+                                    log_message(f"  EMAIL: {email_id.decode()} contient un mot-clé dans le corps.")
                                     body_found = True
                                     break
                             except (UnicodeDecodeError, AttributeError) as e:
-                                log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
+                                log_message(f"  EMAIL: Erreur de décodage du corps de {email_id.decode()} - {e}. Passage à l'attachement.")
                                 continue
                     if body_found:
                         attachment_processed = False
@@ -233,56 +253,65 @@ def process_emails():
                             if attachment_part.get('Content-Disposition') and 'attachment' in attachment_part.get('Content-Disposition'):
                                 filename = attachment_part.get_filename()
                                 if filename and (filename.lower().endswith('.jpg') or filename.lower().endswith('.png')):
-                                    log_message(f"  📧 Traitement de l'attachment {filename} dans l'email {email_id.decode()}...")
+                                    log_message(f"  ATTACHEMENT: Traitement de {filename} dans {email_id.decode()}...")
                                     image_data = attachment_part.get_payload(decode=True)
-                                    log_message(f"  Taille des données de l'image {filename}: {len(image_data) if image_data else 'None'} octets")
+                                    log_message(f"  ATTACHEMENT: Données de {filename} récupérées, taille {len(image_data)} octets, type {type(image_data)}")
                                     if image_data is None or len(image_data) == 0:
-                                        log_message(f"  Données d'image absentes ou vides pour {filename}.")
+                                        log_message(f"  ATTACHEMENT: Données absentes ou vides pour {filename}.")
                                         continue
-                                    # Débogage : Vérifier les premiers octets pour identifier le format
-                                    log_message(f"  Premiers 10 octets de l'image {filename}: {image_data[:10].hex() if image_data else 'None'}")
-                                    # Tentative de décodage avec OpenCV
+                                    log_message(f"  ATTACHEMENT: Premiers 20 octets de {filename}: {image_data[:20].hex()}")
+                                    log_message(f"  ATTACHEMENT: Derniers 20 octets de {filename}: {image_data[-20:].hex() if len(image_data) > 20 else 'Insuffisant'}")
+                                    # Décodage avec OpenCV
                                     img_cv2 = cv2.imdecode(np.frombuffer(image_data, np.uint8), cv2.IMREAD_COLOR)
                                     if img_cv2 is None:
-                                        log_message(f"  Échec du décodage de l'image {filename} avec OpenCV.")
-                                        # Tentative de décodage avec Pillow comme secours
+                                        log_message(f"  DÉCODAGE: Échec avec OpenCV pour {filename}, tentative avec Pillow...")
                                         try:
                                             pil_image = Image.open(io.BytesIO(image_data))
                                             img_cv2 = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-                                            log_message(f"  Décodage de l'image {filename} réussi avec Pillow.")
+                                            log_message(f"  DÉCODAGE: Succès avec Pillow pour {filename}, dimensions {pil_image.size}")
                                         except Exception as e:
-                                            log_message(f"  Échec du décodage de l'image {filename} avec Pillow : {e}")
-                                            continue
-                                    # Forcer l'appel à detect_human même si l'image est partiellement décodée
-                                    detection_result = detect_human(img_cv2, filename)
-                                    if detection_result:
-                                        log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email à {RECIPIENT_EMAIL}.")
-                                        send_email_alert(RECIPIENT_EMAIL, image_data, filename)
+                                            log_message(f"  DÉCODAGE: Échec avec Pillow pour {filename} - {e}")
+                                            img_cv2 = None
+                                    # Prétraitement
+                                    img_processed = preprocess_image(img_cv2, filename)
+                                    if img_processed is None:
+                                        log_message(f"  PRÉTRAITEMENT: Échec pour {filename}. L'email {email_id.decode()} est conservé.")
+                                        continue
+                                    # Détection
+                                    detection_result = detect_human(img_processed, filename)
+                                    if detection_result is not None:
+                                        log_message(f"  DÉTECTION: Résultat pour {filename}: {detection_result}")
+                                        if detection_result:
+                                            log_message(f"  ACTION: Humain détecté dans {filename}. Envoi de l’alerte email à {RECIPIENT_EMAIL}.")
+                                            send_email_alert(RECIPIENT_EMAIL, image_data, filename)
+                                        log_message(f"  ACTION: Suppression de {email_id.decode()} après traitement réussi.")
+                                        mail.store(email_id, '+FLAGS', '\\Deleted')
+                                        try:
+                                            mail.expunge()
+                                            log_message(f"  ACTION: Suppression confirmée pour {email_id.decode()}.")
+                                        except Exception as e:
+                                            log_message(f"  ACTION: Erreur lors de l'expunge pour {email_id.decode()} - {e}")
+                                    else:
+                                        log_message(f"  ACTION: Échec de la détection pour {filename}. L'email {email_id.decode()} est conservé.")
                                     attachment_processed = True
-                        # Supprimer l'e-mail après traitement, même sans pièce jointe
-                        log_message(f"  Suppression de l'email {email_id.decode()} après traitement.")
-                        mail.store(email_id, '+FLAGS', '\\Deleted')
-                        try:
-                            mail.expunge()
-                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()}.")
-                        except Exception as e:
-                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()} : {e}")
+                        if not attachment_processed:
+                            log_message(f"  ACTION: Aucun attachement valide dans {email_id.decode()}. Conservé.")
                 time.sleep(2)
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
-                log_message(f"  Erreur lors du traitement de l'email {email_id.decode()} : {e}")
-                log_message("  Tentative de reconnexion IMAP...")
+                log_message(f"  ERREUR: Traitement de {email_id.decode()} a échoué - {e}")
+                log_message("  IMAP: Tentative de reconnexion...")
                 mail.logout()
                 mail = connect_to_imap()
                 if not mail:
-                    log_message("  Échec de la reconnexion IMAP. Arrêt du traitement.")
+                    log_message("  IMAP: Échec de la reconnexion. Arrêt du traitement.")
                     return
                 continue
         
         mail.logout()
-        log_message("Déconnexion IMAP réussie.")
-        log_message("Analyse des emails terminée.")
+        log_message("IMAP: Déconnexion réussie.")
+        log_message("IMAP: Analyse des emails terminée.")
     except Exception as e:
-        log_message(f"  Erreur inattendue lors du traitement des emails : {e}")
+        log_message(f"  ERREUR GLOBALE: Traitement des emails a échoué - {e}")
         import traceback
         traceback.print_exc()
     finally:
@@ -302,15 +331,15 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 def run_health_check_server():
     server_address = ('', 8000)
     httpd = HTTPServer(server_address, HealthCheckHandler)
-    log_message("Démarrage du serveur de health check sur le port 8000...")
+    log_message("HEALTH: Démarrage du serveur de health check sur le port 8000...")
     try:
         httpd.serve_forever()
     except Exception as e:
-        log_message(f"Erreur dans le serveur de health check : {e}")
+        log_message(f"HEALTH: Erreur dans le serveur de health check - {e}")
 
 # === SCRIPT PRINCIPAL (pour boucle infinie) ===
 def main():
-    log_message("--- Initialisation du script de surveillance des emails ---")
+    log_message("INIT: --- Initialisation du script de surveillance des emails ---")
     required_vars = {
         "DEST_EMAIL": RECIPIENT_EMAIL,
         "SENDER_EMAIL": EMAIL_ADDRESS,
@@ -318,31 +347,31 @@ def main():
     }
     missing_vars = [name for name, value in required_vars.items() if not value]
     if missing_vars:
-        log_message(f"ERREUR CRITIQUE: Variables d'environnement manquantes : {', '.join(missing_vars)}.")
-        log_message("Veuillez vérifier leur configuration sur Koyeb.")
+        log_message(f"INIT: ERREUR CRITIQUE: Variables manquantes - {', '.join(missing_vars)}.")
+        log_message("INIT: Vérifiez la configuration sur Koyeb.")
         return
 
     health_check_thread = threading.Thread(target=run_health_check_server, daemon=True)
     health_check_thread.start()
-    log_message("Serveur de health check démarré.")
+    log_message("INIT: Serveur de health check démarré.")
 
     if not load_yolo_model():
-        log_message("Échec du chargement du modèle YOLO. Le script continuera mais la détection YOLO sera désactivée.")
+        log_message("INIT: Échec du chargement du modèle YOLO. La détection sera désactivée.")
 
-    log_message(f"Emails analysés sur: {EMAIL_ADDRESS}")
-    log_message(f"Emails envoyés à: {RECIPIENT_EMAIL}")
-    log_message(f"Emails envoyés de: {EMAIL_ADDRESS}")
-    log_message("----------------------------------------------------")
+    log_message(f"INIT: Emails analysés sur: {EMAIL_ADDRESS}")
+    log_message(f"INIT: Emails envoyés à: {RECIPIENT_EMAIL}")
+    log_message(f"INIT: Emails envoyés de: {EMAIL_ADDRESS}")
+    log_message("INIT: ----------------------------------------------------")
 
-    log_message("Début de la boucle principale...")
+    log_message("MAIN: Début de la boucle principale...")
     while True:
         try:
-            log_message("--- Début d'une nouvelle exécution ---")
+            log_message("MAIN: --- Début d'une nouvelle exécution ---")
             process_emails()
-            log_message("--- Fin de l'exécution, attente de 30 secondes ---")
-            time.sleep(30)  # Boucle réactive toutes les 30 secondes
+            log_message("MAIN: --- Fin de l'exécution, attente de 30 secondes ---")
+            time.sleep(30)
         except Exception as e:
-            log_message(f"Une erreur majeure est survenue dans main() : {e}")
+            log_message(f"MAIN: Erreur majeure - {e}")
             import traceback
             traceback.print_exc()
             time.sleep(30)

@@ -12,6 +12,7 @@ import email
 import socket
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import pytz  # Ajout de pytz pour gérer les fuseaux horaires
 
 # === CONFIGURATION via Variables d'Environnement ===
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
@@ -23,6 +24,9 @@ SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")
 SMTP_SERVER = "imap.gmail.com"
 SMTP_PORT = 993
 IMAP_TIMEOUT = 120
+
+# Fuseau horaire de France
+FRANCE_TZ = pytz.timezone("Europe/Paris")
 
 # Fichiers YOLO
 YOLO_WEIGHTS_FILE = "yolov3-tiny.weights"
@@ -128,11 +132,13 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
         log_message("  AVERTISSEMENT: SENDER_EMAIL ou APP_PASSWORD non configurés. Impossible d'envoyer l'email.")
         return
     msg = MIMEMultipart()
-    subject = f"Humain présent à {detection_time.strftime('%H:%M')}"
+    # Convertir l'heure UTC en heure de France (CEST en mai)
+    detection_time_france = detection_time.astimezone(FRANCE_TZ)
+    subject = f"Humain présent à {detection_time_france.strftime('%H:%M')}"
     msg['Subject'] = subject
     msg['From'] = SENDER_EMAIL
     msg['To'] = recipient_email
-    body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email) à {detection_time.strftime("%H:%M")} UTC.'
+    body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email) à {detection_time_france.strftime("%H:%M")} (heure de France).'
     msg.attach(MIMEText(body_text, 'plain'))
     
     if image_bytes_for_attachment:
@@ -369,12 +375,12 @@ def main():
             log_message("--- Début d'une nouvelle exécution ---")
             process_emails()
             log_message("--- Fin de l'exécution, attente de 10 secondes ---")
-            time.sleep(10)  # Réduction à 10 secondes pour une réactivité accrue
+            time.sleep(10)
         except Exception as e:
             log_message(f"Une erreur majeure est survenue dans main() : {e}")
             import traceback
             traceback.print_exc()
-            time.sleep(10)  # Continue même en cas d'erreur avec un délai de 10 secondes
+            time.sleep(10)
 
 if __name__ == "__main__":
     main()

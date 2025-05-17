@@ -16,7 +16,6 @@ from PIL import Image
 import io
 
 # === CONFIGURATION via Variables d'Environnement ===
-CHECK_ALL_EMAILS = os.environ.get("CHECK_ALL_EMAILS", "false").lower() == "true"  # Par défaut, uniquement non lus
 RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com").lower()  # Normalisation de la casse
 EMAIL_ADDRESS = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")  # Utilise SENDER_EMAIL comme adresse principale
 EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")  # Utilise APP_PASSWORD comme mot de passe
@@ -186,11 +185,7 @@ def process_emails():
     try:
         since_date = (datetime.datetime.now() - datetime.timedelta(hours=6)).strftime("%d-%b-%Y")
         search_criteria = f'SINCE "{since_date}"'
-        if CHECK_ALL_EMAILS:
-            log_message("Mode CHECK_ALL_EMAILS activé : analyse de tous les emails (lus et non lus).")
-        else:
-            search_criteria += " UNSEEN"
-            log_message("Mode par défaut : analyse uniquement des emails non lus.")
+        log_message("Analyse de tous les emails (lus et non lus).")
         status, data = mail.search(None, search_criteria)
         email_ids = data[0].split()[:10]  # Limiter à 10 e-mails
         log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
@@ -229,6 +224,7 @@ def process_emails():
                                 log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
                                 continue
                     if body_found:
+                        attachment_processed = False
                         for attachment_part in msg.walk():
                             if attachment_part.get_content_maintype() == 'multipart':
                                 continue
@@ -259,14 +255,15 @@ def process_emails():
                                     if detection_result is True:
                                         log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email à {RECIPIENT_EMAIL}.")
                                         send_email_alert(RECIPIENT_EMAIL, image_data, filename)
-                                    log_message(f"  Suppression de l'email {email_id.decode()} après traitement.")
-                                    mail.store(email_id, '+FLAGS', '\\Deleted')
-                                    try:
-                                        mail.expunge()
-                                        log_message(f"  Suppression confirmée pour l'email {email_id.decode()}.")
-                                    except Exception as e:
-                                        log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
-                                    break
+                                    attachment_processed = True
+                        # Supprimer l'e-mail après traitement, même s'il n'a pas de pièce jointe
+                        log_message(f"  Suppression de l'email {email_id.decode()} après traitement.")
+                        mail.store(email_id, '+FLAGS', '\\Deleted')
+                        try:
+                            mail.expunge()
+                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()}.")
+                        except Exception as e:
+                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
                 time.sleep(2)
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
                 log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")

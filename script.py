@@ -188,7 +188,7 @@ def process_emails():
 
     try:
         since_date = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime("%d-%b-%Y")
-        status, data = mail.search(None, f'SINCE "{since_date}"')  # Analyse tous les emails depuis 1 heure, lus ou non lus
+        status, data = mail.search(None, f'SINCE "{since_date}"')
         email_ids = data[0].split()
         log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
         if not email_ids:
@@ -225,7 +225,7 @@ def process_emails():
                                 log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
                                 continue
                     if body_found:
-                        if "DetectEnd" in body:  # Suppression immédiate pour tous les emails avec "DetectEnd"
+                        if "DetectEnd" in body:
                             log_message(f"  📧 Email {email_id.decode()} contient 'DetectEnd'. Suppression immédiate.")
                             mail.store(email_id, '+FLAGS', '\\Deleted')
                             try:
@@ -262,13 +262,20 @@ def process_emails():
                                         log_message(f"  ❌ Aucun humain détecté dans {filename}.")
                                     else:
                                         log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}.")
-                        if has_attachment:  # Suppression après traitement si un attachment a été traité
-                            mail.store(email_id, '+FLAGS', '\\Deleted')
-                            try:
+                        # Suppression systématique après traitement si un mot-clé est trouvé
+                        mail.store(email_id, '+FLAGS', '\\Deleted')
+                        try:
+                            mail.expunge()
+                            log_message(f"  Suppression confirmée pour l'email {email_id.decode()} après traitement.")
+                        except Exception as e:
+                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                            # Tentative de reconnexion et expunge
+                            mail.logout()
+                            mail = connect_to_imap()
+                            if mail:
+                                mail.store(email_id, '+FLAGS', '\\Deleted')
                                 mail.expunge()
-                                log_message(f"  Suppression confirmée pour l'email {email_id.decode()} après traitement.")
-                            except Exception as e:
-                                log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                                log_message(f"  Suppression confirmée après reconnexion pour l'email {email_id.decode()}.")
                 time.sleep(3)
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
                 log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")

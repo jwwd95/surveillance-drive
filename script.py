@@ -14,11 +14,12 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # === CONFIGURATION via Variables d'Environnement ===
-RECIPIENT_EMAIL = os.environ.get("DEST_EMAIL")
-EMAIL_SENDER = os.environ.get("SENDER_EMAIL")
-EMAIL_PASSWORD = os.environ.get("APP_PASSWORD")
-EMAIL_USER = os.environ.get("EMAIL_USER", "saidben9560@gmail.com")  # À ajuster selon besoin
-EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "fzij nhjh fxlf dfrv")
+DEST_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
+PYTHONUNBUFFERED = os.environ.get("PYTHONUNBUFFERED", "1")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")
+EMAIL_USER = os.environ.get("EMAIL_USER", "saidben9560@gmail.com")  # Par défaut, à ajuster si nécessaire
+EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")  # À ajouter sur Koyeb
 
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
@@ -129,12 +130,12 @@ def detect_human(image_cv2, image_name_for_log):
     return False
 
 def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email):
-    if not EMAIL_SENDER or not EMAIL_PASSWORD:
-        log_message("  AVERTISSEMENT: EMAIL_SENDER ou APP_PASSWORD non configurés. Impossible d'envoyer l'email.")
+    if not SENDER_EMAIL or not APP_PASSWORD:
+        log_message("  AVERTISSEMENT: SENDER_EMAIL ou APP_PASSWORD non configurés. Impossible d'envoyer l'email.")
         return
     msg = MIMEMultipart()
     msg['Subject'] = f'🛑 Humain détecté sur l’image: {image_name_for_email}'
-    msg['From'] = EMAIL_SENDER
+    msg['From'] = SENDER_EMAIL
     msg['To'] = recipient_email
     body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email).'
     msg.attach(MIMEText(body_text, 'plain'))
@@ -158,7 +159,7 @@ def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for
             msg.attach(MIMEText(body_text, 'plain'))
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            smtp.login(SENDER_EMAIL, APP_PASSWORD)
             smtp.send_message(msg)
         log_message(f"  Email envoyé avec succès à {recipient_email} pour l'image {image_name_for_email}")
     except Exception as e:
@@ -259,7 +260,7 @@ def process_emails():
                                     detection_result = detect_human(img_cv2, filename)
                                     if detection_result is True:
                                         log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
-                                        send_email_alert(RECIPIENT_EMAIL, image_data, filename)
+                                        send_email_alert(DEST_EMAIL, image_data, filename)
                                     elif detection_result is False:
                                         log_message(f"  ❌ Aucun humain détecté dans {filename}. Suppression de l'email et de l'attachment.")
                                         mail.store(email_id, '+FLAGS', '\\Deleted')
@@ -328,9 +329,9 @@ def run_health_check_server():
 def main():
     log_message("--- Initialisation du script de surveillance des emails ---")
     required_vars = {
-        "SENDER_EMAIL": EMAIL_SENDER,
-        "APP_PASSWORD": EMAIL_PASSWORD,
-        "DEST_EMAIL": RECIPIENT_EMAIL,
+        "SENDER_EMAIL": SENDER_EMAIL,
+        "APP_PASSWORD": APP_PASSWORD,
+        "DEST_EMAIL": DEST_EMAIL,
         "EMAIL_APP_PASSWORD": EMAIL_APP_PASSWORD
     }
     missing_vars = [name for name, value in required_vars.items() if not value]
@@ -348,8 +349,8 @@ def main():
         log_message("Échec du chargement du modèle YOLO. Le script continuera mais la détection YOLO sera désactivée.")
 
     log_message(f"Emails analysés sur: {EMAIL_USER}")
-    log_message(f"Emails envoyés à: {RECIPIENT_EMAIL}")
-    log_message(f"Emails envoyés de: {EMAIL_SENDER}")
+    log_message(f"Emails envoyés à: {DEST_EMAIL}")
+    log_message(f"Emails envoyés de: {SENDER_EMAIL}")
     log_message("----------------------------------------------------")
 
     log_message("Début de la boucle principale...")

@@ -90,17 +90,17 @@ def preprocess_image(image_cv2):
 
 def detect_human(image_cv2, image_name_for_log):
     if image_cv2 is None:
-        log_message(f"  Image non valide reçue pour la détection ({image_name_for_log}).")
-        return None
+        log_message(f"  Image non valide ou non décodée pour la détection ({image_name_for_log}).")
+        return False
     height, width = image_cv2.shape[:2]
     if height == 0 or width == 0:
         log_message(f"  Image vide reçue pour la détection ({image_name_for_log}, dimensions: {height}x{width}).")
-        return None
+        return False
     
     image_cv2 = preprocess_image(image_cv2)
     if image_cv2 is None:
         log_message(f"  Échec du prétraitement pour l'image ({image_name_for_log}).")
-        return None
+        return False
 
     blob = cv2.dnn.blobFromImage(image_cv2, 1/255.0, (416, 416), swapRB=True, crop=False)
     yolo_net.setInput(blob)
@@ -108,14 +108,16 @@ def detect_human(image_cv2, image_name_for_log):
         outputs = yolo_net.forward(yolo_output_layers)
     except Exception as e:
         log_message(f"  Erreur pendant la propagation avant (forward pass) YOLO pour {image_name_for_log}: {e}")
-        return None
+        return False
     for output in outputs:
         for detection in output:
             scores = detection[5:]
             class_id_index = np.argmax(scores)
             confidence = scores[class_id_index]
             if class_id_index < len(yolo_classes) and yolo_classes[class_id_index] == 'person' and confidence > 0.3:
+                log_message(f"  ✅ Humain détecté dans {image_name_for_log} avec confiance {confidence:.2f}.")
                 return True
+    log_message(f"  ⛔ Aucun humain détecté dans {image_name_for_log}.")
     return False
 
 def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email):
@@ -251,22 +253,23 @@ def process_emails():
                                         except Exception as e:
                                             log_message(f"  Échec du décodage de l'image {filename} avec Pillow : {e}")
                                             continue
+                                    # Forcer l'appel à detect_human même si l'image est partiellement décodée
                                     detection_result = detect_human(img_cv2, filename)
-                                    if detection_result is True:
+                                    if detection_result:
                                         log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email à {RECIPIENT_EMAIL}.")
                                         send_email_alert(RECIPIENT_EMAIL, image_data, filename)
                                     attachment_processed = True
-                        # Supprimer l'e-mail après traitement, même s'il n'a pas de pièce jointe
+                        # Supprimer l'e-mail après traitement, même sans pièce jointe
                         log_message(f"  Suppression de l'email {email_id.decode()} après traitement.")
                         mail.store(email_id, '+FLAGS', '\\Deleted')
                         try:
                             mail.expunge()
                             log_message(f"  Suppression confirmée pour l'email {email_id.decode()}.")
                         except Exception as e:
-                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                            log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()} : {e}")
                 time.sleep(2)
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
-                log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")
+                log_message(f"  Erreur lors du traitement de l'email {email_id.decode()} : {e}")
                 log_message("  Tentative de reconnexion IMAP...")
                 mail.logout()
                 mail = connect_to_imap()

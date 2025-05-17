@@ -188,7 +188,6 @@ def process_emails():
         return
 
     try:
-        # Supprime la restriction de date, analyse tous les emails
         status, data = mail.search(None, "ALL")
         email_ids = data[0].split()
         log_message(f"Nombre d'emails trouvés : {len(email_ids)}")
@@ -202,8 +201,8 @@ def process_emails():
                 mail.noop()
                 log_message(f"Fetching email ID: {email_id.decode()}")
                 status, msg_data = mail.fetch(email_id, "(RFC822)")
-                if status != 'OK' or not msg_data or len(msg_data) < 2 or msg_data[0] is None:
-                    log_message(f"  Échec de la récupération de l'email {email_id.decode()}: statut {status} ou données invalides")
+                if status != 'OK' or not msg_data or len(msg_data) < 2:
+                    log_message(f"  Échec de la récupération de l'email {email_id.decode()}: statut {status} ou données manquantes")
                     failed_count += 1
                     if failed_count >= max_failures:
                         log_message(f"  Trop d'échecs consécutifs ({failed_count}). Tentative de reconnexion...")
@@ -215,6 +214,9 @@ def process_emails():
                         failed_count = 0
                     continue
                 failed_count = 0
+                if not isinstance(msg_data[0], tuple) or len(msg_data[0]) < 2 or not isinstance(msg_data[0][1], bytes):
+                    log_message(f"  Données invalides pour l'email {email_id.decode()} : type {type(msg_data[0][1]) if len(msg_data[0]) > 1 else 'None'}, valeur {msg_data[0][1] if len(msg_data[0]) > 1 else 'None'}")
+                    continue
                 raw_email = msg_data[0][1]
                 if not isinstance(raw_email, bytes):
                     log_message(f"  Données invalides pour l'email {email_id.decode()} : type {type(raw_email)}, valeur {raw_email}")

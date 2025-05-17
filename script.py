@@ -14,12 +14,10 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # === CONFIGURATION via Variables d'Environnement ===
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "fzij nhjh fxlf dfrv")
+APP_PASSWORD = os.environ.get("APP_PASSWORD")  # Pas de valeur par défaut en clair
 DEST_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
 PYTHONUNBUFFERED = os.environ.get("PYTHONUNBUFFERED", "1")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")
-EMAIL_USER = os.environ.get("EMAIL_USER", "saidben9560@gmail.com")  # Par défaut, à ajuster si nécessaire
-EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD")  # À ajouter sur Koyeb
 
 # Constantes pour IMAP (Gmail)
 SMTP_SERVER = "imap.gmail.com"
@@ -173,7 +171,7 @@ def connect_to_imap():
             mail = imaplib.IMAP4_SSL(SMTP_SERVER, SMTP_PORT)
             mail.socket().settimeout(IMAP_TIMEOUT)
             log_message(f"Tentative de connexion à imap.gmail.com (essai {attempt + 1}/{max_retries})...")
-            mail.login(EMAIL_USER, EMAIL_APP_PASSWORD)
+            mail.login(SENDER_EMAIL, APP_PASSWORD)  # Utilisation de SENDER_EMAIL et APP_PASSWORD
             log_message("Connexion IMAP réussie. Sélection de la boîte inbox...")
             mail.select("inbox")
             return mail
@@ -331,8 +329,7 @@ def main():
     required_vars = {
         "SENDER_EMAIL": SENDER_EMAIL,
         "APP_PASSWORD": APP_PASSWORD,
-        "DEST_EMAIL": DEST_EMAIL,
-        "EMAIL_APP_PASSWORD": EMAIL_APP_PASSWORD
+        "DEST_EMAIL": DEST_EMAIL
     }
     missing_vars = [name for name, value in required_vars.items() if not value]
     if missing_vars:
@@ -348,7 +345,7 @@ def main():
     if not load_yolo_model():
         log_message("Échec du chargement du modèle YOLO. Le script continuera mais la détection YOLO sera désactivée.")
 
-    log_message(f"Emails analysés sur: {EMAIL_USER}")
+    log_message(f"Emails analysés sur: {SENDER_EMAIL}")
     log_message(f"Emails envoyés à: {DEST_EMAIL}")
     log_message(f"Emails envoyés de: {SENDER_EMAIL}")
     log_message("----------------------------------------------------")

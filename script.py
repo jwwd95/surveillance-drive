@@ -123,15 +123,16 @@ def detect_human(image_cv2, image_name_for_log):
     log_message(f"  Aucun humain détecté dans {image_name_for_log}")
     return False
 
-def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email):
+def send_email_alert(recipient_email, image_bytes_for_attachment, image_name_for_email, detection_time):
     if not SENDER_EMAIL or not APP_PASSWORD:
         log_message("  AVERTISSEMENT: SENDER_EMAIL ou APP_PASSWORD non configurés. Impossible d'envoyer l'email.")
         return
     msg = MIMEMultipart()
-    msg['Subject'] = f'🛑 Humain détecté sur l’image: {image_name_for_email}'
+    subject = f"Humain présent à {detection_time.strftime('%H:%M')}"
+    msg['Subject'] = subject
     msg['From'] = SENDER_EMAIL
     msg['To'] = recipient_email
-    body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email).'
+    body_text = f'Un humain a été détecté sur l’image "{image_name_for_email}" ci-jointe (reçue par email) à {detection_time.strftime("%H:%M")} UTC.'
     msg.attach(MIMEText(body_text, 'plain'))
     
     if image_bytes_for_attachment:
@@ -187,13 +188,15 @@ def process_emails():
         return
 
     try:
-        since_date = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime("%d-%b-%Y")
-        status, data = mail.search(None, f'SINCE "{since_date}"')
+        # Supprime la restriction de date, analyse tous les emails
+        status, data = mail.search(None, "ALL")
         email_ids = data[0].split()
-        log_message(f"Nombre d'emails trouvés (depuis {since_date}) : {len(email_ids)}")
+        log_message(f"Nombre d'emails trouvés : {len(email_ids)}")
         if not email_ids:
             log_message("  Aucun email trouvé dans la boîte.")
         
+        failed_count = 0
+        max_failures = 3
         for email_id in email_ids:
             try:
                 mail.noop()
@@ -201,7 +204,17 @@ def process_emails():
                 status, msg_data = mail.fetch(email_id, "(RFC822)")
                 if status != 'OK' or not msg_data or len(msg_data) < 2 or msg_data[0] is None:
                     log_message(f"  Échec de la récupération de l'email {email_id.decode()}: statut {status} ou données invalides")
+                    failed_count += 1
+                    if failed_count >= max_failures:
+                        log_message(f"  Trop d'échecs consécutifs ({failed_count}). Tentative de reconnexion...")
+                        mail.logout()
+                        mail = connect_to_imap()
+                        if not mail:
+                            log_message("  Échec de la reconnexion IMAP. Arrêt du traitement.")
+                            return
+                        failed_count = 0
                     continue
+                failed_count = 0
                 raw_email = msg_data[0][1]
                 if not isinstance(raw_email, bytes):
                     log_message(f"  Données invalides pour l'email {email_id.decode()} : type {type(raw_email)}, valeur {raw_email}")
@@ -225,6 +238,7 @@ def process_emails():
                                 log_message(f"  ⚠️ Erreur de décodage du corps de l'email {email_id.decode()}: {e}. Passage à l'attachement.")
                                 continue
                     if body_found:
+                        detection_time = datetime.datetime.now(datetime.timezone.utc)
                         if "DetectEnd" in body:
                             log_message(f"  📧 Email {email_id.decode()} contient 'DetectEnd'. Suppression immédiate.")
                             mail.store(email_id, '+FLAGS', '\\Deleted')
@@ -233,6 +247,12 @@ def process_emails():
                                 log_message(f"  Suppression confirmée pour l'email {email_id.decode()} (DetectEnd).")
                             except Exception as e:
                                 log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
+                                mail.logout()
+                                mail = connect_to_imap()
+                                if mail:
+                                    mail.store(email_id, '+FLAGS', '\\Deleted')
+                                    mail.expunge()
+                                    log_message(f"  Suppression confirmée après reconnexion pour l'email {email_id.decode()}.")
                             continue
                         has_attachment = False
                         for attachment_part in msg.walk():
@@ -257,26 +277,24 @@ def process_emails():
                                     detection_result = detect_human(img_cv2, filename)
                                     if detection_result is True:
                                         log_message(f"  ✅ Humain détecté dans {filename}. Envoi de l’alerte email.")
-                                        send_email_alert(DEST_EMAIL, image_data, filename)
+                                        send_email_alert(DEST_EMAIL, image_data, filename, detection_time)
                                     elif detection_result is False:
                                         log_message(f"  ❌ Aucun humain détecté dans {filename}.")
                                     else:
                                         log_message(f"  ⚠️ Erreur de décodage/détection sur {filename}.")
-                        # Suppression systématique après traitement si un mot-clé est trouvé
                         mail.store(email_id, '+FLAGS', '\\Deleted')
                         try:
                             mail.expunge()
                             log_message(f"  Suppression confirmée pour l'email {email_id.decode()} après traitement.")
                         except Exception as e:
                             log_message(f"  Erreur lors de l'expunge pour l'email {email_id.decode()}: {e}")
-                            # Tentative de reconnexion et expunge
                             mail.logout()
                             mail = connect_to_imap()
                             if mail:
                                 mail.store(email_id, '+FLAGS', '\\Deleted')
                                 mail.expunge()
                                 log_message(f"  Suppression confirmée après reconnexion pour l'email {email_id.decode()}.")
-                time.sleep(3)
+                time.sleep(4)
             except (imaplib.IMAP4.error, socket.timeout, AttributeError) as e:
                 log_message(f"  Erreur lors du traitement de l'email {email_id.decode()}: {e}")
                 log_message("  Tentative de reconnexion IMAP...")

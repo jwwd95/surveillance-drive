@@ -12,7 +12,8 @@ import email
 import socket
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import pytz  # Dépendance à installer via requirements.txt
+import pytz
+import requests  # Ajout pour simuler une activité réseau
 
 # === CONFIGURATION via Variables d'Environnement ===
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
@@ -41,6 +42,17 @@ yolo_classes = None
 # === FONCTIONS UTILITAIRES ===
 def log_message(message):
     print(f"[{datetime.datetime.now(datetime.timezone.utc).isoformat()}] {message}", flush=True)
+
+# === TÂCHE POUR GARDER L'INSTANCE ACTIVE ===
+def keep_alive():
+    while True:
+        try:
+            # Appeler le health check local pour générer une activité réseau
+            response = requests.get("http://localhost:8000")
+            log_message(f"Keep-alive ping: {response.status_code}")
+        except Exception as e:
+            log_message(f"Erreur lors du keep-alive ping : {e}")
+        time.sleep(60)  # Ping toutes les 60 secondes
 
 # === INITIALISATION ===
 def load_yolo_model():
@@ -356,9 +368,15 @@ def main():
         log_message("Veuillez vérifier leur configuration sur Koyeb.")
         return
 
+    # Lancer le serveur de health check
     health_check_thread = threading.Thread(target=run_health_check_server, daemon=True)
     health_check_thread.start()
     log_message("Serveur de health check démarré.")
+
+    # Lancer la tâche keep-alive pour éviter le mode sleep
+    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_alive_thread.start()
+    log_message("Tâche keep-alive démarrée pour éviter le mode sleep.")
 
     if not load_yolo_model():
         log_message("Échec du chargement du modèle YOLO. Le script continuera mais la détection YOLO sera désactivée.")

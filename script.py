@@ -13,7 +13,6 @@ import email
 import os
 import pytz
 import requests
-import sys
 
 app = Flask(__name__)
 
@@ -21,8 +20,8 @@ app = Flask(__name__)
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
 DEST_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")
-KOYEB_API_TOKEN = os.environ.get("KOYEB_API_TOKEN")  # Ajoutez votre token API Koyeb
-KOYEB_SERVICE_ID = os.environ.get("KOYEB_SERVICE_ID")  # Ajoutez l'ID de votre service
+KOYEB_API_TOKEN = os.environ.get("KOYEB_API_TOKEN", "tffsuh11ifyybt2mjqaam1xz5z2ahe88tx8yqsidy0p40jihz6eqe9c06ieumuzt")
+KOYEB_SERVICE_ID = os.environ.get("KOYEB_SERVICE_ID", "dbf9b5e8-b828-4a5b-853e-21bf0cf1fa10")
 
 # Variables globales pour YOLO
 yolo_net = None
@@ -82,6 +81,7 @@ def send_email_alert(image_name, image_data, detected_class):
 @app.route('/')
 @app.route('/health')
 def health_check():
+    log_message("Health check réussi")
     return "OK", 200
 
 # Route pour déclencher la surveillance
@@ -124,17 +124,14 @@ def restart_service():
     }
     base_url = "https://app.koyeb.com/v1"
 
-    # Étape 1 : Arrêter le service
     log_message("Arrêt du service...")
     response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/pause", headers=headers)
     if response.status_code != 200:
         log_message(f"Erreur lors de l'arrêt : {response.text}")
         return "Erreur lors de l'arrêt", 500
 
-    # Attendre quelques secondes pour s'assurer que l'arrêt est effectif
     time.sleep(5)
 
-    # Étape 2 : Redémarrer le service
     log_message("Redémarrage du service...")
     response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers)
     if response.status_code != 200:
@@ -153,4 +150,4 @@ def run_background():
 if __name__ == "__main__":
     if load_yolo_model():
         threading.Thread(target=run_background, daemon=True).start()
-        app.run(host="0.0.0.0", port=8080)
+        app.run(host="0.0.0.0", port=8000)

@@ -1,0 +1,7 @@
+kind: Service
+name: surveillance-service
+port: 8080
+build:
+  context: .
+run:
+  command: python script.py

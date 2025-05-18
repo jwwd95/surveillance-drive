@@ -114,30 +114,23 @@ def trigger_surveillance():
 # Route pour redémarrer le service via l'API de Koyeb
 @app.route('/restart')
 def restart_service():
+    log_message("Appel à /restart reçu")
     if not KOYEB_API_TOKEN or not KOYEB_SERVICE_ID:
         log_message("Erreur : KOYEB_API_TOKEN ou KOYEB_SERVICE_ID manquant")
         return "Erreur de configuration", 500
-
-    headers = {
-        "Authorization": f"Bearer {KOYEB_API_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {KOYEB_API_TOKEN}", "Content-Type": "application/json"}
     base_url = "https://app.koyeb.com/v1"
-
     log_message("Arrêt du service...")
     response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/pause", headers=headers)
     if response.status_code != 200:
         log_message(f"Erreur lors de l'arrêt : {response.text}")
         return "Erreur lors de l'arrêt", 500
-
     time.sleep(5)
-
     log_message("Redémarrage du service...")
     response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers)
     if response.status_code != 200:
         log_message(f"Erreur lors du redémarrage : {response.text}")
         return "Erreur lors du redémarrage", 500
-
     log_message("Redémarrage terminé")
     return "Service redémarré", 200
 

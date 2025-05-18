@@ -3,3 +3,4 @@ numpy>=1.21.0
 Pillow>=10.3.0
 pytz
 flask
+requests

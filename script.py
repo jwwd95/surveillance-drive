@@ -134,7 +134,22 @@ def restart_service():
         if service_status is None:
             log_message("État non récupéré, arrêt du processus")
             return "État non récupéré", 500
-        if service_status not in ["HEALTHY", "STARTING"]:
+        # Reprendre si le service est PAUSED
+        if service_status == "PAUSED":
+            log_message("Service en pause, tentative de reprise...")
+            response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers, timeout=10)
+            if response.status_code != 200:
+                log_message(f"Erreur reprise : {response.text}")
+                return f"Erreur reprise: {response.text}", 500
+            log_message("Reprise réussie")
+            time.sleep(10)  # Attendre 10 secondes pour que l'instance soit HEALTHY
+            status_response = requests.get(f"{base_url}/services/{KOYEB_SERVICE_ID}", headers=headers, timeout=5)
+            if status_response.status_code == 200:
+                service_status = status_response.json().get("service", {}).get("status")
+                if service_status != "HEALTHY":
+                    log_message(f"État après reprise inattendu : {service_status}")
+                    return f"État après reprise inattendu: {service_status}", 500
+        elif service_status not in ["HEALTHY", "STARTING"]:
             log_message(f"Service dans un état non redéployable : {service_status}")
             return f"Service dans un état non redéployable : {service_status}", 400
     except Exception as e:
@@ -143,7 +158,7 @@ def restart_service():
     # Lancer le redéploiement
     log_message("Tentative de redéploiement...")
     try:
-        response = requests.post(f"{base_url}/deployments/{KOYEB_DEPLOYMENT_ID}/redeploy", headers=headers, timeout=5)
+        response = requests.post(f"{base_url}/deployments/{KOYEB_DEPLOYMENT_ID}/redeploy", headers=headers, timeout=10)
         if response.status_code != 200:
             log_message(f"Erreur redéploiement : {response.text}")
             return f"Erreur redéploiement: {response.text}", 500

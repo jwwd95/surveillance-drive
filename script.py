@@ -22,7 +22,6 @@ DEST_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")
 KOYEB_API_TOKEN = os.environ.get("KOYEB_API_TOKEN", "tffsuh11ifyybt2mjqaam1xz5z2ahe88tx8yqsidy0p40jihz6eqe9c06ieumuzt")
 KOYEB_SERVICE_ID = os.environ.get("KOYEB_SERVICE_ID", "dbf9b5e8-b828-4a5b-853e-21bf0cf1fa10")
-KOYEB_DEPLOYMENT_ID = os.environ.get("KOYEB_DEPLOYMENT_ID", "f9c47b30-2524-4132-9439-37fa1f39d979")  # Remplace par l'ID de déploiement actif
 
 # Variables globales pour YOLO
 yolo_net = None
@@ -116,12 +115,12 @@ def trigger_surveillance():
 @app.route('/restart')
 def restart_service():
     log_message("Appel à /restart reçu")
-    if not KOYEB_API_TOKEN or not KOYEB_SERVICE_ID or not KOYEB_DEPLOYMENT_ID:
-        log_message("Erreur : KOYEB_API_TOKEN, KOYEB_SERVICE_ID ou KOYEB_DEPLOYMENT_ID manquant")
+    if not KOYEB_API_TOKEN or not KOYEB_SERVICE_ID:
+        log_message("Erreur : KOYEB_API_TOKEN ou KOYEB_SERVICE_ID manquant")
         return "Erreur de configuration", 500
     headers = {"Authorization": f"Bearer {KOYEB_API_TOKEN}", "Content-Type": "application/json"}
     base_url = "https://app.koyeb.com/v1"
-    # Vérifier l'état actuel
+    # Vérifier l'état actuel et récupérer l'ID de déploiement
     try:
         status_response = requests.get(f"{base_url}/services/{KOYEB_SERVICE_ID}", headers=headers, timeout=5)
         if status_response.status_code != 200:
@@ -130,10 +129,15 @@ def restart_service():
         log_message(f"Réponse API état : {status_response.text}")
         service_data = status_response.json()
         service_status = service_data.get("service", {}).get("status")
+        deployment_id = service_data.get("service", {}).get("active_deployment_id")
         log_message(f"État actuel : {service_status}")
+        log_message(f"ID de déploiement actif : {deployment_id}")
         if service_status is None:
             log_message("État non récupéré, arrêt du processus")
             return "État non récupéré", 500
+        if deployment_id is None:
+            log_message("ID de déploiement non récupéré, arrêt du processus")
+            return "ID de déploiement non récupéré", 500
         # Reprendre si le service est PAUSED
         if service_status == "PAUSED":
             log_message("Service en pause, tentative de reprise...")
@@ -155,10 +159,10 @@ def restart_service():
     except Exception as e:
         log_message(f"Exception vérification état : {str(e)}")
         return f"Exception vérification: {str(e)}", 500
-    # Lancer le redéploiement
+    # Lancer le redéploiement avec l'ID dynamique
     log_message("Tentative de redéploiement...")
     try:
-        response = requests.post(f"{base_url}/deployments/{KOYEB_DEPLOYMENT_ID}/redeploy", headers=headers, timeout=10)
+        response = requests.post(f"{base_url}/deployments/{deployment_id}/redeploy", headers=headers, timeout=10)
         if response.status_code != 200:
             log_message(f"Erreur redéploiement : {response.text}")
             return f"Erreur redéploiement: {response.text}", 500

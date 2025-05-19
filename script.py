@@ -142,8 +142,8 @@ def restart_service():
                 log_message(f"Erreur pause : {response.text}")
                 return f"Erreur pause: {response.text}", 500
             log_message("Pause initiée")
-            # Attendre et vérifier l'état jusqu'à PAUSED ou timeout
-            max_wait = 30  # Augmenter à 30 secondes
+            # Attendre et vérifier l'état jusqu'à PAUSED, STOPPED ou timeout
+            max_wait = 60  # Augmenter à 60 secondes
             wait_time = 0
             while wait_time < max_wait:
                 time.sleep(2)  # Vérification toutes les 2 secondes
@@ -152,9 +152,12 @@ def restart_service():
                 if status_check.status_code == 200:
                     new_status = status_check.json().get("service", {}).get("status")
                     log_message(f"État après {wait_time}s : {new_status}")
-                    if new_status in ["PAUSED", "STOPPED"]:  # Accepter STOPPED si l'instance s'arrête
+                    if new_status in ["PAUSED", "STOPPED"]:
                         break
-            if wait_time >= max_wait or new_status not in ["PAUSED", "STOPPED"]:
+                    elif "TERMINATED" in new_status:  # Gérer l'arrêt forcé
+                        log_message("Instance terminée, tentative de reprise annulée")
+                        return "Instance terminée", 400
+            if wait_time >= max_wait and new_status not in ["PAUSED", "STOPPED"]:
                 log_message(f"Timeout ou échec de la pause, état actuel : {new_status}")
                 return "Pause non appliquée après timeout", 500
         else:

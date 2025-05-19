@@ -142,15 +142,21 @@ def restart_service():
                 log_message(f"Erreur pause : {response.text}")
                 return f"Erreur pause: {response.text}", 500
             log_message("Pause initiée")
-            # Attendre et vérifier l'état
-            time.sleep(5)  # Délai accru pour garantir la synchronisation
-            status_check = requests.get(f"{base_url}/services/{KOYEB_SERVICE_ID}", headers=headers, timeout=5)
-            if status_check.status_code == 200:
-                new_status = status_check.json().get("service", {}).get("status")
-                log_message(f"État après pause : {new_status}")
-                if new_status != "PAUSED":
-                    log_message(f"Échec de la pause, état actuel : {new_status}")
-                    return "Pause non appliquée", 500
+            # Attendre et vérifier l'état jusqu'à PAUSED ou timeout
+            max_wait = 15  # Maximum 15 secondes
+            wait_time = 0
+            while wait_time < max_wait:
+                time.sleep(2)  # Vérification toutes les 2 secondes
+                wait_time += 2
+                status_check = requests.get(f"{base_url}/services/{KOYEB_SERVICE_ID}", headers=headers, timeout=5)
+                if status_check.status_code == 200:
+                    new_status = status_check.json().get("service", {}).get("status")
+                    log_message(f"État après {wait_time}s : {new_status}")
+                    if new_status == "PAUSED":
+                        break
+            if wait_time >= max_wait or new_status != "PAUSED":
+                log_message(f"Timeout ou échec de la pause, état actuel : {new_status}")
+                return "Pause non appliquée après timeout", 500
         else:
             log_message(f"État inattendu : {service_status}")
             return f"État inattendu: {service_status}", 400
@@ -162,22 +168,4 @@ def restart_service():
     try:
         response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers, timeout=5)
         if response.status_code != 200:
-            log_message(f"Erreur reprise : {response.text}")
-            return f"Erreur reprise: {response.text}", 500
-        log_message("Reprise réussie")
-    except Exception as e:
-        log_message(f"Exception reprise : {str(e)}")
-        return f"Exception reprise: {str(e)}", 500
-    log_message("Redémarrage terminé")
-    return "Service redémarré", 200
-
-# Boucle en arrière-plan
-def run_background():
-    while True:
-        log_message("Vérification en arrière-plan...")
-        time.sleep(300)
-
-if __name__ == "__main__":
-    if load_yolo_model():
-        threading.Thread(target=run_background, daemon=True).start()
-        app.run(host="0.0.0.0", port=8000)
+            log_message(f"Erreur reprise :

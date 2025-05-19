@@ -130,7 +130,7 @@ def restart_service():
     except Exception as e:
         log_message(f"Exception pause : {str(e)}")
         return f"Exception pause: {str(e)}", 500
-    time.sleep(2)
+    time.sleep(1)  # Réduit à 1 seconde pour minimiser le risque de timeout
     log_message("Tentative de reprise...")
     try:
         response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers, timeout=10)

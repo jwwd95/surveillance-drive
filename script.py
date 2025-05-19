@@ -22,6 +22,7 @@ DEST_EMAIL = os.environ.get("DEST_EMAIL", "jalfatimi@gmail.com")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "saidben9560@gmail.com")
 KOYEB_API_TOKEN = os.environ.get("KOYEB_API_TOKEN", "tffsuh11ifyybt2mjqaam1xz5z2ahe88tx8yqsidy0p40jihz6eqe9c06ieumuzt")
 KOYEB_SERVICE_ID = os.environ.get("KOYEB_SERVICE_ID", "dbf9b5e8-b828-4a5b-853e-21bf0cf1fa10")
+KOYEB_DEPLOYMENT_ID = os.environ.get("KOYEB_DEPLOYMENT_ID", "f9c47b30-2524-4132-9439-37fa1f39d979")  # Remplace par l'ID de déploiement actif
 
 # Variables globales pour YOLO
 yolo_net = None
@@ -115,8 +116,8 @@ def trigger_surveillance():
 @app.route('/restart')
 def restart_service():
     log_message("Appel à /restart reçu")
-    if not KOYEB_API_TOKEN or not KOYEB_SERVICE_ID:
-        log_message("Erreur : KOYEB_API_TOKEN ou KOYEB_SERVICE_ID manquant")
+    if not KOYEB_API_TOKEN or not KOYEB_SERVICE_ID or not KOYEB_DEPLOYMENT_ID:
+        log_message("Erreur : KOYEB_API_TOKEN, KOYEB_SERVICE_ID ou KOYEB_DEPLOYMENT_ID manquant")
         return "Erreur de configuration", 500
     headers = {"Authorization": f"Bearer {KOYEB_API_TOKEN}", "Content-Type": "application/json"}
     base_url = "https://app.koyeb.com/v1"
@@ -133,50 +134,23 @@ def restart_service():
         if service_status is None:
             log_message("État non récupéré, arrêt du processus")
             return "État non récupéré", 500
-        elif service_status == "PAUSED":
-            log_message("Service déjà en pause, passage direct à la reprise")
-        elif service_status == "HEALTHY":
-            log_message("Tentative de pause...")
-            response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/pause", headers=headers, timeout=5)
-            if response.status_code != 200:
-                log_message(f"Erreur pause : {response.text}")
-                return f"Erreur pause: {response.text}", 500
-            log_message("Pause initiée")
-            # Attendre et vérifier l'état jusqu'à PAUSED, STOPPED ou timeout
-            max_wait = 60  # Augmenter à 60 secondes
-            wait_time = 0
-            while wait_time < max_wait:
-                time.sleep(2)  # Vérification toutes les 2 secondes
-                wait_time += 2
-                status_check = requests.get(f"{base_url}/services/{KOYEB_SERVICE_ID}", headers=headers, timeout=5)
-                if status_check.status_code == 200:
-                    new_status = status_check.json().get("service", {}).get("status")
-                    log_message(f"État après {wait_time}s : {new_status}")
-                    if new_status in ["PAUSED", "STOPPED"]:
-                        break
-                    elif "TERMINATED" in new_status:  # Gérer l'arrêt forcé
-                        log_message("Instance terminée, tentative de reprise annulée")
-                        return "Instance terminée", 400
-            if wait_time >= max_wait and new_status not in ["PAUSED", "STOPPED"]:
-                log_message(f"Timeout ou échec de la pause, état actuel : {new_status}")
-                return "Pause non appliquée après timeout", 500
-        else:
-            log_message(f"État inattendu : {service_status}")
-            return f"État inattendu: {service_status}", 400
+        if service_status not in ["HEALTHY", "STARTING"]:
+            log_message(f"Service dans un état non redéployable : {service_status}")
+            return f"Service dans un état non redéployable : {service_status}", 400
     except Exception as e:
         log_message(f"Exception vérification état : {str(e)}")
         return f"Exception vérification: {str(e)}", 500
-    # Tentative de reprise
-    log_message("Tentative de reprise...")
+    # Lancer le redéploiement
+    log_message("Tentative de redéploiement...")
     try:
-        response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers, timeout=5)
+        response = requests.post(f"{base_url}/deployments/{KOYEB_DEPLOYMENT_ID}/redeploy", headers=headers, timeout=5)
         if response.status_code != 200:
-            log_message(f"Erreur reprise : {response.text}")
-            return f"Erreur reprise: {response.text}", 500
-        log_message("Reprise réussie")
+            log_message(f"Erreur redéploiement : {response.text}")
+            return f"Erreur redéploiement: {response.text}", 500
+        log_message("Redéploiement initié")
     except Exception as e:
-        log_message(f"Exception reprise : {str(e)}")
-        return f"Exception reprise: {str(e)}", 500
+        log_message(f"Exception redéploiement : {str(e)}")
+        return f"Exception redéploiement: {str(e)}", 500
     log_message("Redémarrage terminé")
     return "Service redémarré", 200
 

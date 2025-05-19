@@ -126,10 +126,13 @@ def restart_service():
         if status_response.status_code != 200:
             log_message(f"Erreur API état : {status_response.text}")
             return f"Erreur API état: {status_response.text}", 500
-        service_status = status_response.json().get("status")
+        log_message(f"Réponse API état : {status_response.text}")
+        service_data = status_response.json()
+        service_status = service_data.get("service", {}).get("status")
         log_message(f"État actuel : {service_status}")
         if service_status is None:
-            log_message("État non récupéré, tentative de redémarrage forcé")
+            log_message("État non récupéré, arrêt du processus")
+            return "État non récupéré", 500
         elif service_status == "PAUSED":
             log_message("Service déjà en pause, passage direct à la reprise")
         elif service_status == "HEALTHY":

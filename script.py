@@ -120,24 +120,34 @@ def restart_service():
         return "Erreur de configuration", 500
     headers = {"Authorization": f"Bearer {KOYEB_API_TOKEN}", "Content-Type": "application/json"}
     base_url = "https://app.koyeb.com/v1"
-    log_message("Arrêt du service...")
-    response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/pause", headers=headers)
-    if response.status_code != 200:
-        log_message(f"Erreur lors de l'arrêt : {response.text}")
-        return "Erreur lors de l'arrêt", 500
-    time.sleep(5)
-    log_message("Redémarrage du service...")
-    response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers)
-    if response.status_code != 200:
-        log_message(f"Erreur lors du redémarrage : {response.text}")
-        return "Erreur lors du redémarrage", 500
+    log_message("Tentative de pause...")
+    try:
+        response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/pause", headers=headers, timeout=10)
+        if response.status_code != 200:
+            log_message(f"Erreur pause : {response.text}")
+            return f"Erreur pause: {response.text}", 500
+        log_message("Pause réussie")
+    except Exception as e:
+        log_message(f"Exception pause : {str(e)}")
+        return f"Exception pause: {str(e)}", 500
+    time.sleep(2)
+    log_message("Tentative de reprise...")
+    try:
+        response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers, timeout=10)
+        if response.status_code != 200:
+            log_message(f"Erreur reprise : {response.text}")
+            return f"Erreur reprise: {response.text}", 500
+        log_message("Reprise réussie")
+    except Exception as e:
+        log_message(f"Exception reprise : {str(e)}")
+        return f"Exception reprise: {str(e)}", 500
     log_message("Redémarrage terminé")
     return "Service redémarré", 200
 
 # Boucle en arrière-plan
 def run_background():
     while True:
-        log_message("Vérification en cours...")
+        log_message("Vérification en arrière-plan...")
         time.sleep(300)
 
 if __name__ == "__main__":

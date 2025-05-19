@@ -141,20 +141,23 @@ def restart_service():
             if response.status_code != 200:
                 log_message(f"Erreur pause : {response.text}")
                 return f"Erreur pause: {response.text}", 500
-            log_message("Pause réussie")
-            # Vérifier l'état après pause
-            time.sleep(3)  # Augmenter le délai à 3 secondes
+            log_message("Pause initiée")
+            # Attendre et vérifier l'état
+            time.sleep(5)  # Délai accru pour garantir la synchronisation
             status_check = requests.get(f"{base_url}/services/{KOYEB_SERVICE_ID}", headers=headers, timeout=5)
-            if status_check.status_code == 200 and status_check.json().get("service", {}).get("status") != "PAUSED":
-                log_message(f"Échec de la pause, état actuel : {status_check.json().get('service', {}).get('status')}")
-                return "Pause non appliquée", 500
+            if status_check.status_code == 200:
+                new_status = status_check.json().get("service", {}).get("status")
+                log_message(f"État après pause : {new_status}")
+                if new_status != "PAUSED":
+                    log_message(f"Échec de la pause, état actuel : {new_status}")
+                    return "Pause non appliquée", 500
         else:
             log_message(f"État inattendu : {service_status}")
             return f"État inattendu: {service_status}", 400
     except Exception as e:
         log_message(f"Exception vérification état : {str(e)}")
         return f"Exception vérification: {str(e)}", 500
-    time.sleep(3)  # Augmenter le délai avant reprise
+    # Tentative de reprise
     log_message("Tentative de reprise...")
     try:
         response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers, timeout=5)

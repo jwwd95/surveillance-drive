@@ -168,4 +168,22 @@ def restart_service():
     try:
         response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/resume", headers=headers, timeout=5)
         if response.status_code != 200:
-            log_message(f"Erreur reprise :
+            log_message(f"Erreur reprise : {response.text}")
+            return f"Erreur reprise: {response.text}", 500
+        log_message("Reprise réussie")
+    except Exception as e:
+        log_message(f"Exception reprise : {str(e)}")
+        return f"Exception reprise: {str(e)}", 500
+    log_message("Redémarrage terminé")
+    return "Service redémarré", 200
+
+# Boucle en arrière-plan
+def run_background():
+    while True:
+        log_message("Vérification en arrière-plan...")
+        time.sleep(300)
+
+if __name__ == "__main__":
+    if load_yolo_model():
+        threading.Thread(target=run_background, daemon=True).start()
+        app.run(host="0.0.0.0", port=8000)

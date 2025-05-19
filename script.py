@@ -123,21 +123,25 @@ def restart_service():
     # Vérifier l'état actuel
     try:
         status_response = requests.get(f"{base_url}/services/{KOYEB_SERVICE_ID}", headers=headers, timeout=5)
-        if status_response.status_code == 200:
-            service_status = status_response.json().get("status")
-            log_message(f"État actuel : {service_status}")
-            if service_status == "PAUSED":
-                log_message("Service déjà en pause, passage direct à la reprise")
-            elif service_status == "HEALTHY":
-                log_message("Tentative de pause...")
-                response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/pause", headers=headers, timeout=5)
-                if response.status_code != 200:
-                    log_message(f"Erreur pause : {response.text}")
-                    return f"Erreur pause: {response.text}", 500
-                log_message("Pause réussie")
-            else:
-                log_message(f"État inattendu : {service_status}")
-                return f"État inattendu: {service_status}", 400
+        if status_response.status_code != 200:
+            log_message(f"Erreur API état : {status_response.text}")
+            return f"Erreur API état: {status_response.text}", 500
+        service_status = status_response.json().get("status")
+        log_message(f"État actuel : {service_status}")
+        if service_status is None:
+            log_message("État non récupéré, tentative de redémarrage forcé")
+        elif service_status == "PAUSED":
+            log_message("Service déjà en pause, passage direct à la reprise")
+        elif service_status == "HEALTHY":
+            log_message("Tentative de pause...")
+            response = requests.post(f"{base_url}/services/{KOYEB_SERVICE_ID}/pause", headers=headers, timeout=5)
+            if response.status_code != 200:
+                log_message(f"Erreur pause : {response.text}")
+                return f"Erreur pause: {response.text}", 500
+            log_message("Pause réussie")
+        else:
+            log_message(f"État inattendu : {service_status}")
+            return f"État inattendu: {service_status}", 400
     except Exception as e:
         log_message(f"Exception vérification état : {str(e)}")
         return f"Exception vérification: {str(e)}", 500
